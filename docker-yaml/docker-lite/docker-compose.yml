@@ -1,10 +1,16 @@
-services: 
+version: '3.8'
+
+services:
   aircat-server-lite:
-    build: 
-      context: ../..
-      dockerfile: lite.Dockerfile   
-    image: aircat-server-lite
+    image: upcyan/aircat-server-lite:latest
     container_name: aircat-server-lite
-    ports: 
+    ports:
       - "9000:9000"
-    restart: always    
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      - TZ=Asia/Shanghai
