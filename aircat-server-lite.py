@@ -12,7 +12,8 @@ from common import function
 time_sleep = 5        # 采集间隔（秒）
 SOCKET_PORT = 9000    # 监听端口
 BUFFER_SIZE = 4096    # 接收缓冲区（增大以处理更大数据包）
-RECV_TIMEOUT = 30     # 接收超时时间（秒），增加容错性
+RECV_TIMEOUT = 10     # 单次接收超时时间（秒），缩短避免长时间阻塞
+MAX_RETRY = 3         # 超时最大重试次数，超过则断开连接重连
 
 # M1设备查询指令（保持原样）
 GET_MSG = b'\xaaO\x01%F\x119\x8f\x0b\x00\x00\x00\x00\x00\x00\x00\x00\xb0\xf8\x93\x11dR\x007\x00\x00\x02{"type":5,"status":1}\xff#END#'
@@ -89,6 +90,9 @@ class M1Server:
                     self.server_socket.settimeout(1.0)  # 允许定期检查running状态
                     conn, addr = self.server_socket.accept()
                     
+                    # 清理已结束的客户端线程，防止内存泄漏
+                    self.clients = [t for t in self.clients if t.is_alive()]
+                    
                     client_thread = threading.Thread(
                         target=self._handle_client,
                         args=(conn, addr),
@@ -111,6 +115,10 @@ class M1Server:
     def _handle_client(self, conn, addr):
         """处理单个客户端连接"""
         _log(f"New connection from {addr}", 0)
+        
+        # 启用TCP Keepalive，检测死连接
+        conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        retry_count = 0
         
         try:
             while self.running:
@@ -143,15 +151,29 @@ class M1Server:
                     if json_data:
                         self._process_data(json_data, addr)
                     
+                    # 成功收到数据，重置重试计数
+                    retry_count = 0
+                    
                     # 等待下一次采集
                     time.sleep(time_sleep)
                     
                 except socket.timeout:
-                    # 超时不中断连接，继续下一轮循环
-                    _log(f"Client {addr} timeout, continuing...", 1)
+                    retry_count += 1
+                    _log(f"Client {addr} timeout ({retry_count}/{MAX_RETRY})", 1)
+                    
+                    if retry_count >= MAX_RETRY:
+                        _log(f"Client {addr} max retry reached, closing connection", 2)
+                        break
+                    
+                    # 短暂等待后重试，避免立即重试导致设备压力过大
+                    time.sleep(1)
                     continue
+                    
                 except ConnectionResetError:
                     _log(f"Client {addr} reset connection", 1)
+                    break
+                except (BrokenPipeError, ConnectionAbortedError):
+                    _log(f"Client {addr} connection aborted", 1)
                     break
                 except Exception as e:
                     _log(f"Client {addr} error: {e}", 2)
