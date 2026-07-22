@@ -1,0 +1,10 @@
+services: 
+  aircat-server-lite:
+    build: 
+      context: ../..
+      dockerfile: lite.Dockerfile   
+    image: aircat-server-lite
+    container_name: aircat-server-lite
+    ports: 
+      - "9000:9000"
+    restart: always    
