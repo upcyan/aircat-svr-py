@@ -1,0 +1,6 @@
+aircat-server-py/static/js/echarts.min.js linguist-vendored
+aircat-server-py/static/js/vue.min.js linguist-vendored
+aircat-server-py/static/js/layer_mobile/* linguist-vendored
+aircat-server-py/static/js/flexible.js linguist-vendored
+aircat-server-py/static/css/iconfont.* linguist-vendored
+aircat-server-py/static/images/* linguist-vendored
