@@ -1,10 +1,10 @@
-# 斐讯空气猫 M1 服务器
+# 斐讯悟空 M1 服务器
 
 > Docker 镜像：[upcyan/aircat-server-lite](https://hub.docker.com/r/upcyan/aircat-server-lite)
 >
 > 支持架构：`linux/amd64` · `linux/arm64`
 
-基于 Docker 和 Python 的斐讯空气猫（Phicomm AirCat）M1 设备数据采集服务器。
+基于 Docker 和 Python 的斐讯悟空（Phicomm AirCat）M1 设备数据采集服务器。
 
 ## 功能特性
 
@@ -168,7 +168,7 @@ python aircat-server-lite.py
 镜像地址：[hub.docker.com/r/upcyan/aircat-server-lite](https://hub.docker.com/r/upcyan/aircat-server-lite)
 
 - **仓库名**：`upcyan/aircat-server-lite`
-- **中文简介**：斐讯空气猫 M1 数据采集服务器
+- **中文简介**：斐讯悟空 M1 数据采集服务器
 - **支持架构**：amd64 / arm64
 - **自动构建**：每次推送到 main 分支自动构建并递增版本号
 
