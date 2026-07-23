@@ -12,8 +12,8 @@ from common import function
 time_sleep = 5        # 采集间隔（秒）
 SOCKET_PORT = 9000    # 监听端口
 BUFFER_SIZE = 4096    # 接收缓冲区（增大以处理更大数据包）
-RECV_TIMEOUT = 30     # 单次接收超时时间（秒），设备响应可能较慢
-MAX_RETRY = 5         # 超时最大重试次数，超过则断开连接重连
+RECV_TIMEOUT = 10     # 单次接收超时时间（秒），缩短以快速检测网络问题
+MAX_RETRY = 3         # 超时最大重试次数，超过则断开连接重连
 
 # M1设备查询指令（保持原样）
 GET_MSG = b'\xaaO\x01%F\x119\x8f\x0b\x00\x00\x00\x00\x00\x00\x00\x00\xb0\xf8\x93\x11dR\x007\x00\x00\x02{"type":5,"status":1}\xff#END#'
