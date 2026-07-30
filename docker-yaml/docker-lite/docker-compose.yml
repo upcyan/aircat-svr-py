@@ -1,10 +1,18 @@
-services: 
+services:
   aircat-server-lite:
-    build: 
-      context: ../..
-      dockerfile: lite.Dockerfile   
-    image: aircat-server-lite
+    image: upcyan/aircat-server-lite:latest
     container_name: aircat-server-lite
-    ports: 
+    ports:
       - "9000:9000"
-    restart: always    
+    environment:
+      - TZ=Asia/Shanghai
+      # 控制台日志级别: DEBUG/INFO/WARNING/ERROR, 默认 DEBUG
+      - LOG_LEVEL=DEBUG
+      # 是否写入日志文件: true/false, 默认 false
+      - LOG_FILE=false
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

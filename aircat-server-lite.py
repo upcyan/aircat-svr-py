@@ -18,34 +18,46 @@ MAX_RETRY = 3         # 超时最大重试次数，超过则断开连接重连
 # M1设备查询指令（保持原样）
 GET_MSG = b'\xaaO\x01%F\x119\x8f\x0b\x00\x00\x00\x00\x00\x00\x00\x00\xb0\xf8\x93\x11dR\x007\x00\x00\x02{"type":5,"status":1}\xff#END#'
 
-# ========== 日志配置（修复重复Handler问题） ==========
+# ========== 日志配置（通过环境变量控制） ==========
+# LOG_LEVEL: DEBUG/INFO/WARNING/ERROR, 默认 DEBUG（控制台输出含DEBUG）
+# LOG_FILE: true/false, 默认 false（关闭日志文件）
+LOG_LEVEL = os.environ.get('LOG_LEVEL', 'DEBUG').upper()
+LOG_FILE = os.environ.get('LOG_FILE', 'false').lower() == 'true'
+
+_LEVEL_MAP = {
+    'DEBUG': logging.DEBUG,
+    'INFO': logging.INFO,
+    'WARNING': logging.WARNING,
+    'ERROR': logging.ERROR
+}
+
 def setup_logger():
     """配置日志，避免重复添加Handler"""
     logger = logging.getLogger('PhicommM1 Server')
-    logger.setLevel(logging.DEBUG)
-    
-    # 如果已有Handler，不再添加
+    level = _LEVEL_MAP.get(LOG_LEVEL, logging.DEBUG)
+    logger.setLevel(level)
+
     if logger.handlers:
         return logger
-    
+
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s : %(message)s')
-    
+
     # 控制台输出
     console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.DEBUG)
+    console_handler.setLevel(level)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
-    
-    # 文件输出
-    log_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'logs')
-    os.makedirs(log_dir, exist_ok=True)  # 自动创建目录
-    
-    log_file = os.path.join(log_dir, time.strftime('%Y-%m-%d') + '.log')
-    file_handler = logging.FileHandler(filename=log_file, encoding='utf8')
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-    
+
+    # 文件输出（默认关闭）
+    if LOG_FILE:
+        log_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'logs')
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, time.strftime('%Y-%m-%d') + '.log')
+        file_handler = logging.FileHandler(filename=log_file, encoding='utf8')
+        file_handler.setLevel(level)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+
     return logger
 
 # 全局logger实例

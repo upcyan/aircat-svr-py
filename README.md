@@ -52,15 +52,17 @@ aircat-svr-py/
 # 拉取最新镜像
 docker pull upcyan/aircat-server-lite:latest
 
-# 运行容器
+# 运行容器（默认：控制台DEBUG输出，关闭日志文件）
 docker run -d \
   --name aircat-server \
   -p 9000:9000 \
   -e TZ=Asia/Shanghai \
+  -e LOG_LEVEL=DEBUG \
+  -e LOG_FILE=false \
   --restart always \
   upcyan/aircat-server-lite:latest
 
-# 查看日志
+# 查看日志（docker logs命令输出控制台日志）
 docker logs -f aircat-server
 ```
 
@@ -72,6 +74,31 @@ docker logs -f aircat-server
 | `0.1.1` | 指定版本号 |
 
 > ARM 设备（树莓派、群晖 ARM 等）会自动拉取 arm64 架构镜像，无需额外配置。
+
+**环境变量配置（docker run）：**
+
+```bash
+# 生产环境：仅输出 INFO 级别日志
+docker run -d \
+  --name aircat-server \
+  -p 9000:9000 \
+  -e TZ=Asia/Shanghai \
+  -e LOG_LEVEL=INFO \
+  -e LOG_FILE=false \
+  --restart always \
+  upcyan/aircat-server-lite:latest
+
+# 开启日志文件持久化（需挂载日志目录）
+docker run -d \
+  --name aircat-server \
+  -p 9000:9000 \
+  -v /your/log/path:/logs \
+  -e TZ=Asia/Shanghai \
+  -e LOG_LEVEL=DEBUG \
+  -e LOG_FILE=true \
+  --restart always \
+  upcyan/aircat-server-lite:latest
+```
 
 ### 方式二：使用 Docker Compose
 
@@ -87,6 +114,13 @@ services:
       - "9000:9000"
     environment:
       - TZ=Asia/Shanghai
+      # 控制台日志级别: DEBUG/INFO/WARNING/ERROR, 默认 DEBUG
+      - LOG_LEVEL=DEBUG
+      # 是否写入日志文件: true/false, 默认 false
+      - LOG_FILE=false
+    # 如需开启日志文件持久化，取消下两行注释并修改宿主机路径
+    # volumes:
+    #   - ./logs:/logs
     restart: always
     logging:
       driver: "json-file"
@@ -133,16 +167,30 @@ python aircat-server-lite.py
 
 ## 配置说明
 
-服务器默认配置如下：
+### 服务器运行参数
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | 监听端口 | 9000 | TCP Socket 端口 |
 | 采集间隔 | 5 秒 | 设备数据采集频率 |
 | 接收缓冲区 | 4096 字节 | Socket 接收缓冲区大小 |
-| 接收超时 | 30 秒 | 数据接收超时时间 |
-| 最大重试次数 | 5 次 | 超时后最大重试次数 |
-| 日志目录 | `logs/` | 日志文件存储目录 |
+| 接收超时 | 10 秒 | 数据接收超时时间 |
+| 最大重试次数 | 3 次 | 超时后最大重试次数 |
+
+### 日志环境变量
+
+通过环境变量控制日志输出，支持 Docker / Docker Compose 部署时直接配置：
+
+| 环境变量 | 默认值 | 可选值 | 说明 |
+|----------|--------|--------|------|
+| `LOG_LEVEL` | `DEBUG` | `DEBUG` / `INFO` / `WARNING` / `ERROR` | 控制台日志级别，默认开启DEBUG方便通过 `docker logs` 查看详细输出 |
+| `LOG_FILE` | `false` | `true` / `false` | 是否写入日志文件，默认关闭避免容器内产生垃圾文件，建议使用 Docker 日志驱动查看 |
+
+**配置示例：**
+
+- **调试排查**：`LOG_LEVEL=DEBUG` + `LOG_FILE=false`（默认），通过 `docker logs -f` 查看所有日志
+- **生产环境**：`LOG_LEVEL=INFO` + `LOG_FILE=false`，仅输出重要信息
+- **持久化日志**：`LOG_LEVEL=DEBUG` + `LOG_FILE=true`，挂载 `./logs:/logs` 目录保存日志文件
 
 ## 数据格式
 
