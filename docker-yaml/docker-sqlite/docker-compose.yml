@@ -19,6 +19,10 @@ services:
       # - AUTH_USER=admin
       # 可选: 首次启动设置密码（设置后自动启用认证）
       # - AUTH_PASS=yourpassword
+      # 可选: 首次启动设置 M1 亮度（-1=不控制, 0=息屏, 25/50/75/100=亮度）
+      # - M1_BRIGHTNESS=-1
+      # 可选: 首次启动启用定时开关屏
+      # - M1_TIMER_ENABLED=false
     volumes:
       - ./data:/data
     restart: always

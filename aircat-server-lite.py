@@ -18,6 +18,16 @@ MAX_RETRY = 3         # 超时最大重试次数，超过则断开连接重连
 # M1设备查询指令（保持原样）
 GET_MSG = b'\xaaO\x01%F\x119\x8f\x0b\x00\x00\x00\x00\x00\x00\x00\x00\xb0\xf8\x93\x11dR\x007\x00\x00\x02{"type":5,"status":1}\xff#END#'
 
+# ========== M1 设备控制（通过环境变量配置） ==========
+# 亮度: -1=不控制, 0=息屏, 25/50/75/100=亮度等级
+M1_BRIGHTNESS = int(os.environ.get('M1_BRIGHTNESS', '-1'))
+# 定时开关屏
+M1_TIMER_ENABLED = os.environ.get('M1_TIMER_ENABLED', 'false').lower() == 'true'
+M1_TIMER_DAY_BRIGHTNESS = int(os.environ.get('M1_TIMER_DAY_BRIGHTNESS', '100'))
+M1_TIMER_NIGHT_BRIGHTNESS = int(os.environ.get('M1_TIMER_NIGHT_BRIGHTNESS', '0'))
+M1_TIMER_DAY_START = os.environ.get('M1_TIMER_DAY_START', '07:00')   # 白天开始时间
+M1_TIMER_NIGHT_START = os.environ.get('M1_TIMER_NIGHT_START', '23:00')  # 夜晚开始时间
+
 # ========== 日志配置（通过环境变量控制） ==========
 # LOG_LEVEL: DEBUG/INFO/WARNING/ERROR, 默认 DEBUG（控制台输出含DEBUG）
 # LOG_FILE: true/false, 默认 false（关闭日志文件）
@@ -72,6 +82,34 @@ def _log(message, level=0):
         3: logger.debug
     }
     levels.get(level, logger.info)(message)
+
+
+# ========== M1 亮度控制 ==========
+def get_current_brightness():
+    """根据定时设置获取当前亮度"""
+    if M1_BRIGHTNESS >= 0:
+        # 固定亮度模式
+        return M1_BRIGHTNESS
+
+    if not M1_TIMER_ENABLED:
+        return -1  # 不控制
+
+    # 定时模式
+    now = time.localtime()
+    current_time = now.tm_hour * 60 + now.tm_min
+
+    # 解析白天/夜晚开始时间
+    def parse_time(t_str):
+        h, m = t_str.split(':')
+        return int(h) * 60 + int(m)
+
+    day_start = parse_time(M1_TIMER_DAY_START)
+    night_start = parse_time(M1_TIMER_NIGHT_START)
+
+    if day_start <= current_time < night_start:
+        return M1_TIMER_DAY_BRIGHTNESS
+    else:
+        return M1_TIMER_NIGHT_BRIGHTNESS
 
 
 # ========== Socket服务 ==========
@@ -166,7 +204,18 @@ class M1Server:
                         consecutive_timeout = 0
                     else:
                         _log(f"Client {addr} received data but no valid JSON (len={len(data)})", 1)
-                    
+
+                    # 处理完数据后，检查亮度控制
+                    brightness = get_current_brightness()
+                    if brightness >= 0 and data and len(data) >= 23:
+                        try:
+                            brightness_json = json.dumps({"brightness": brightness})
+                            brightness_msg = data[:23] + b'\x00\x18\x00\x00\x02' + brightness_json.encode('utf-8') + b'\xff#END#'
+                            conn.sendall(brightness_msg)
+                            _log(f"Sent brightness control: {brightness} to {addr}", 3)
+                        except Exception as e:
+                            _log(f"Brightness control error: {e}", 1)
+
                     time.sleep(time_sleep)
                     
                 except socket.timeout:
@@ -269,8 +318,17 @@ def cut(num, decimals):
 
 # ========== 主程序 ==========
 if __name__ == '__main__':
+    # 打印亮度控制配置
+    _log("===== M1 Brightness Control Settings =====", 0)
+    _log(f"M1_BRIGHTNESS (fixed): {M1_BRIGHTNESS} (-1=not controlled, 0=off, 25/50/75/100=level)", 0)
+    _log(f"M1_TIMER_ENABLED: {M1_TIMER_ENABLED}", 0)
+    _log(f"M1_TIMER_DAY_BRIGHTNESS: {M1_TIMER_DAY_BRIGHTNESS}, M1_TIMER_NIGHT_BRIGHTNESS: {M1_TIMER_NIGHT_BRIGHTNESS}", 0)
+    _log(f"M1_TIMER_DAY_START: {M1_TIMER_DAY_START}, M1_TIMER_NIGHT_START: {M1_TIMER_NIGHT_START}", 0)
+    _log(f"Current resolved brightness: {get_current_brightness()}", 0)
+    _log("==========================================", 0)
+
     server = M1Server()
-    
+
     try:
         server.start()
     except KeyboardInterrupt:

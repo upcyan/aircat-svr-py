@@ -10,6 +10,18 @@ services:
       - LOG_LEVEL=DEBUG
       # 是否写入日志文件: true/false, 默认 false
       - LOG_FILE=false
+      # M1 屏幕亮度: -1=不控制, 0=息屏, 25/50/75/100=亮度, 默认 -1
+      - M1_BRIGHTNESS=-1
+      # 定时开关屏: true/false, 默认 false
+      - M1_TIMER_ENABLED=false
+      # 白天亮度: 0-100, 默认 100
+      - M1_TIMER_DAY_BRIGHTNESS=100
+      # 夜晚亮度: 0-100, 默认 0
+      - M1_TIMER_NIGHT_BRIGHTNESS=0
+      # 白天开始时间: HH:MM, 默认 07:00
+      - M1_TIMER_DAY_START=07:00
+      # 夜晚开始时间: HH:MM, 默认 23:00
+      - M1_TIMER_NIGHT_START=23:00
     restart: always
     logging:
       driver: "json-file"

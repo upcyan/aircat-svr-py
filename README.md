@@ -6,6 +6,8 @@
 >
 > 支持架构：`linux/amd64` · `linux/arm64`
 
+> 本项目基于 [fenggenet/PhicommM1_Server](https://github.com/fenggenet/PhicommM1_Server) 修改而来，在原项目基础上增加了 Docker 容器化部署、SQLite 存储、Web 可视化界面、设备亮度控制等功能。
+
 基于 Docker 和 Python 的斐讯悟空（Phicomm AirCat）M1 设备数据采集服务器，提供两个版本：
 
 | 版本 | 说明 | 适用场景 |
@@ -23,6 +25,7 @@
 - 自动断线重连机制
 - 多架构镜像支持（x86 / ARM64）
 - 日志级别和日志文件可通过环境变量控制
+- M1 设备屏幕亮度控制（固定亮度 / 定时开关屏）
 
 ### SQLite 版独有功能
 - 数据自动存入 SQLite 数据库，支持持久化
@@ -205,6 +208,7 @@ services:
 - **认证设置**：启用/关闭登录认证，设置用户名和密码
 - **数据管理**：设置最大记录数（超出自动覆盖）、保存天数（超期自动清理）、手动清理全部数据
 - **调试设置**：切换日志级别（DEBUG/INFO/WARNING/ERROR）、开启/关闭日志文件
+- **设备控制**：设置 M1 屏幕亮度（不控制/息屏/微亮/较暗/较亮/正常）、定时开关屏（白天/夜晚亮度和时间）
 
 ### 本地构建
 
@@ -244,6 +248,21 @@ python aircat-server-sqlite.py
 |----------|--------|--------|------|
 | `LOG_LEVEL` | `DEBUG` | `DEBUG` / `INFO` / `WARNING` / `ERROR` | 控制台日志级别 |
 | `LOG_FILE` | `false` | `true` / `false` | 是否写入日志文件 |
+
+### M1 设备亮度控制环境变量
+
+| 环境变量 | 默认值 | 可选值 | 说明 |
+|----------|--------|--------|------|
+| `M1_BRIGHTNESS` | `-1` | `-1` / `0` / `25` / `50` / `75` / `100` | 屏幕亮度，-1=不控制，0=息屏，100=最亮 |
+| `M1_TIMER_ENABLED` | `false` | `true` / `false` | 启用定时开关屏 |
+| `M1_TIMER_DAY_BRIGHTNESS` | `100` | `0` / `25` / `50` / `75` / `100` | 白天屏幕亮度 |
+| `M1_TIMER_NIGHT_BRIGHTNESS` | `0` | `0` / `25` / `50` / `75` / `100` | 夜晚屏幕亮度 |
+| `M1_TIMER_DAY_START` | `07:00` | `HH:MM` | 白天开始时间 |
+| `M1_TIMER_NIGHT_START` | `23:00` | `HH:MM` | 夜晚开始时间 |
+
+> `M1_BRIGHTNESS` 优先级高于定时设置。当 `M1_BRIGHTNESS >= 0` 时使用固定亮度，忽略定时设置。
+>
+> Lite 版通过环境变量配置，SQLite 版通过 Web 设置面板配置（也可通过环境变量初始化）。
 
 ### SQLite 版独有环境变量
 

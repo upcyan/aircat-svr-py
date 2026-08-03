@@ -427,6 +427,7 @@
         .field input[type="text"],
         .field input[type="password"],
         .field input[type="number"],
+        .field input[type="time"],
         .field select {
             background: var(--bg);
             border: 1px solid var(--border);
@@ -438,6 +439,7 @@
             outline: none;
             transition: border-color 0.2s ease, box-shadow 0.2s ease;
             width: 100%;
+            color-scheme: dark;
         }
 
         .field input:focus,
@@ -515,6 +517,17 @@
 
         .auth-fields.show {
             display: flex;
+        }
+
+        .timer-fields {
+            display: none;
+            padding-left: 28px;
+            border-left: 2px solid var(--accent-dim);
+            margin-left: 2px;
+        }
+
+        .timer-fields > * + * {
+            margin-top: 12px;
         }
 
         .btn {
@@ -894,6 +907,60 @@
                     </label>
                 </div>
 
+                <!-- 设备控制 -->
+                <div class="section">
+                    <div class="section-title">设备控制</div>
+                    <div class="field">
+                        <label for="setting-m1-brightness">屏幕亮度</label>
+                        <select id="setting-m1-brightness">
+                            <option value="-1" selected>不控制</option>
+                            <option value="0">息屏</option>
+                            <option value="25">微亮</option>
+                            <option value="50">较暗</option>
+                            <option value="75">较亮</option>
+                            <option value="100">正常</option>
+                        </select>
+                    </div>
+                    <label class="checkbox-field">
+                        <input type="checkbox" id="setting-m1-timer-enabled">
+                        <span>定时开关屏</span>
+                    </label>
+                    <div class="timer-fields" id="timer-fields">
+                        <div class="field">
+                            <label for="setting-m1-timer-day-brightness">白天亮度</label>
+                            <select id="setting-m1-timer-day-brightness">
+                                <option value="-1">不控制</option>
+                                <option value="0">息屏</option>
+                                <option value="25">微亮</option>
+                                <option value="50">较暗</option>
+                                <option value="75">较亮</option>
+                                <option value="100" selected>正常</option>
+                            </select>
+                        </div>
+                        <div class="field">
+                            <label for="setting-m1-timer-night-brightness">夜晚亮度</label>
+                            <select id="setting-m1-timer-night-brightness">
+                                <option value="-1">不控制</option>
+                                <option value="0" selected>息屏</option>
+                                <option value="25">微亮</option>
+                                <option value="50">较暗</option>
+                                <option value="75">较亮</option>
+                                <option value="100">正常</option>
+                            </select>
+                        </div>
+                        <div class="field-row">
+                            <div class="field">
+                                <label for="setting-m1-timer-day-start">白天开始时间</label>
+                                <input type="time" id="setting-m1-timer-day-start" value="07:00">
+                            </div>
+                            <div class="field">
+                                <label for="setting-m1-timer-night-start">夜晚开始时间</label>
+                                <input type="time" id="setting-m1-timer-night-start" value="23:00">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="msg" id="settings-msg"></div>
             </div>
             <div class="modal-footer">
@@ -1122,6 +1189,16 @@
                 }
             });
 
+            // 定时开关屏：显示/隐藏定时字段
+            function toggleTimerFields() {
+                var enabled = document.getElementById("setting-m1-timer-enabled").checked;
+                var fields = document.getElementById("timer-fields");
+                if (fields) {
+                    fields.style.display = enabled ? "block" : "none";
+                }
+            }
+            document.getElementById("setting-m1-timer-enabled").addEventListener("change", toggleTimerFields);
+
             function openSettings() {
                 hideSettingsMsg();
                 settingsOverlay.classList.add("show");
@@ -1168,6 +1245,18 @@
                     var logLevel = document.getElementById("set-log-level");
                     logLevel.value = d.log_level || "INFO";
                     document.getElementById("set-log-file").checked = !!d.log_to_file;
+                    // 设备控制
+                    document.getElementById("setting-m1-brightness").value =
+                        (d.m1_brightness !== undefined && d.m1_brightness !== null) ? String(d.m1_brightness) : "-1";
+                    document.getElementById("setting-m1-timer-enabled").checked = d.m1_timer_enabled == 1;
+                    document.getElementById("setting-m1-timer-day-brightness").value =
+                        (d.m1_timer_day_brightness !== undefined && d.m1_timer_day_brightness !== null) ? String(d.m1_timer_day_brightness) : "100";
+                    document.getElementById("setting-m1-timer-night-brightness").value =
+                        (d.m1_timer_night_brightness !== undefined && d.m1_timer_night_brightness !== null) ? String(d.m1_timer_night_brightness) : "0";
+                    document.getElementById("setting-m1-timer-day-start").value = d.m1_timer_day_start || "07:00";
+                    document.getElementById("setting-m1-timer-night-start").value = d.m1_timer_night_start || "23:00";
+                    // 根据复选框状态显示/隐藏定时字段
+                    toggleTimerFields();
                 }).catch(function (err) {
                     if (err && err.status !== 401) {
                         showSettingsMsg("加载设置失败", "error");
@@ -1184,7 +1273,13 @@
                     max_records: parseInt(document.getElementById("set-max-records").value, 10) || 10000,
                     retention_days: parseInt(document.getElementById("set-retention-days").value, 10) || 30,
                     log_level: document.getElementById("set-log-level").value,
-                    log_to_file: document.getElementById("set-log-file").checked
+                    log_to_file: document.getElementById("set-log-file").checked,
+                    m1_brightness: parseInt(document.getElementById("setting-m1-brightness").value, 10),
+                    m1_timer_enabled: document.getElementById("setting-m1-timer-enabled").checked ? 1 : 0,
+                    m1_timer_day_brightness: parseInt(document.getElementById("setting-m1-timer-day-brightness").value, 10),
+                    m1_timer_night_brightness: parseInt(document.getElementById("setting-m1-timer-night-brightness").value, 10),
+                    m1_timer_day_start: document.getElementById("setting-m1-timer-day-start").value,
+                    m1_timer_night_start: document.getElementById("setting-m1-timer-night-start").value
                 };
                 var pwd = document.getElementById("set-password").value;
                 if (pwd) { payload.password = pwd; }

@@ -151,6 +151,12 @@ _SETTING_TYPES = {
     'auth_pass': str,
     'log_level': str,
     'log_file': int,
+    'm1_brightness': str,
+    'm1_timer_enabled': int,
+    'm1_timer_day_brightness': int,
+    'm1_timer_night_brightness': int,
+    'm1_timer_day_start': str,
+    'm1_timer_night_start': str,
 }
 
 # 设置项的默认值（log_level / log_file 初始从环境变量读取）
@@ -162,6 +168,12 @@ _SETTING_DEFAULTS = {
     'auth_pass': '',
     'log_level': os.environ.get('LOG_LEVEL', 'DEBUG').upper(),
     'log_file': 1 if os.environ.get('LOG_FILE', 'false').lower() == 'true' else 0,
+    'm1_brightness': '-1',
+    'm1_timer_enabled': 0,
+    'm1_timer_day_brightness': 100,
+    'm1_timer_night_brightness': 0,
+    'm1_timer_day_start': '07:00',
+    'm1_timer_night_start': '23:00',
 }
 
 # 清理后台线程的执行间隔（秒）
@@ -227,6 +239,13 @@ class DatabaseManager:
                 if auth_pass_env is not None:
                     defaults['auth_pass'] = auth_pass_env
                     defaults['auth_enabled'] = 1
+                # 首次启动时支持通过环境变量设置 M1 亮度/定时
+                m1_brightness_env = os.environ.get('M1_BRIGHTNESS')
+                if m1_brightness_env is not None:
+                    defaults['m1_brightness'] = m1_brightness_env
+                m1_timer_enabled_env = os.environ.get('M1_TIMER_ENABLED')
+                if m1_timer_enabled_env is not None:
+                    defaults['m1_timer_enabled'] = 1 if m1_timer_enabled_env.lower() in ('1', 'true', 'yes', 'on') else 0
 
             # 仅插入尚不存在的键（保留已有配置，重启后不丢失）
             for key, value in defaults.items():
@@ -442,7 +461,9 @@ _MIME_TYPES = {
 # 允许通过 /api/settings 更新的键
 _SETTING_KEYS = [
     'max_records', 'retention_days', 'auth_enabled',
-    'auth_user', 'auth_pass', 'log_level', 'log_file'
+    'auth_user', 'auth_pass', 'log_level', 'log_file',
+    'm1_brightness', 'm1_timer_enabled', 'm1_timer_day_brightness',
+    'm1_timer_night_brightness', 'm1_timer_day_start', 'm1_timer_night_start'
 ]
 
 
@@ -634,6 +655,32 @@ def start_web_server(port=WEB_PORT):
 
 
 # ========== Socket服务 ==========
+def get_current_brightness(db):
+    """根据设置获取当前亮度"""
+    m1_brightness = db.get_setting('m1_brightness')
+    if m1_brightness is not None and int(m1_brightness) >= 0:
+        return int(m1_brightness)
+
+    timer_enabled = db.get_setting('m1_timer_enabled')
+    if not timer_enabled:
+        return -1
+
+    now = time.localtime()
+    current_time = now.tm_hour * 60 + now.tm_min
+
+    def parse_time(t_str):
+        h, m = t_str.split(':')
+        return int(h) * 60 + int(m)
+
+    day_start = parse_time(db.get_setting('m1_timer_day_start') or '07:00')
+    night_start = parse_time(db.get_setting('m1_timer_night_start') or '23:00')
+
+    if day_start <= current_time < night_start:
+        return int(db.get_setting('m1_timer_day_brightness') or 100)
+    else:
+        return int(db.get_setting('m1_timer_night_brightness') or 0)
+
+
 class M1Server:
     """M1设备TCP服务器"""
 
@@ -723,6 +770,18 @@ class M1Server:
                         self._process_data(json_data, addr)
                         total_data_count += 1
                         consecutive_timeout = 0
+
+                        # 亮度控制
+                        if db_manager and data and len(data) >= 23:
+                            brightness = get_current_brightness(db_manager)
+                            if brightness >= 0:
+                                try:
+                                    brightness_json = json.dumps({"brightness": brightness})
+                                    brightness_msg = data[:23] + b'\x00\x18\x00\x00\x02' + brightness_json.encode('utf-8') + b'\xff#END#'
+                                    conn.sendall(brightness_msg)
+                                    _log(f"Sent brightness control: {brightness} to {addr}", 3)
+                                except Exception as e:
+                                    _log(f"Brightness control error: {e}", 1)
                     else:
                         _log(f"Client {addr} received data but no valid JSON (len={len(data)})", 1)
 
@@ -853,6 +912,20 @@ if __name__ == '__main__':
 
     # 立即应用数据库中的日志设置
     apply_log_settings()
+
+    # 输出当前 M1 亮度相关设置
+    try:
+        _log(
+            f"M1 brightness settings: brightness={db_manager.get_setting('m1_brightness')}, "
+            f"timer_enabled={db_manager.get_setting('m1_timer_enabled')}, "
+            f"day_brightness={db_manager.get_setting('m1_timer_day_brightness')}, "
+            f"night_brightness={db_manager.get_setting('m1_timer_night_brightness')}, "
+            f"day_start={db_manager.get_setting('m1_timer_day_start')}, "
+            f"night_start={db_manager.get_setting('m1_timer_night_start')}",
+            0
+        )
+    except Exception as e:
+        _log(f"Failed to log M1 brightness settings: {e}", 1)
 
     # 启动 Web 服务器线程
     web_thread = threading.Thread(target=start_web_server, args=(WEB_PORT,), daemon=True)
