@@ -759,6 +759,152 @@
                 font-size: 22px;
             }
         }
+
+        /* ===== 移动端优化 (≤768px 增强) ===== */
+        @media (max-width: 768px) {
+            /* 避免移动端 100vh 在浏览器工具栏出现时跳动 */
+            .overlay {
+                align-items: flex-end;
+                padding: 0;
+            }
+            .modal {
+                max-width: 100%;
+                width: 100%;
+                max-height: 92vh;
+                border-radius: 16px 16px 0 0;
+                animation: slideUp 0.22s ease;
+            }
+            @keyframes slideUp {
+                from { transform: translateY(100%); }
+                to { transform: translateY(0); }
+            }
+            .modal-header {
+                padding: 14px 16px;
+            }
+            .modal-header h2 {
+                font-size: 16px;
+            }
+            .modal-body {
+                padding: 16px;
+            }
+            .modal-footer {
+                position: sticky;
+                bottom: 0;
+                background: var(--bg-card);
+                border-top: 1px solid var(--border);
+                padding: 12px 16px;
+            }
+            /* 时间范围选择器允许换行，避免溢出 */
+            .chart-header {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .range-selector {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+            .range-selector button {
+                flex: 1 1 auto;
+                min-width: 56px;
+                padding: 8px 10px;
+            }
+            /* 触控目标增大，避免误触 */
+            .gear-btn {
+                width: 40px;
+                height: 40px;
+            }
+            .btn {
+                min-height: 42px;
+            }
+        }
+
+        /* ===== 小屏手机 (≤480px) ===== */
+        @media (max-width: 480px) {
+            .container {
+                padding: 10px;
+            }
+            /* 卡片单列，避免窄屏挤压 */
+            .cards {
+                grid-template-columns: 1fr;
+                gap: 10px;
+                margin-bottom: 16px;
+            }
+            .card {
+                padding: 14px;
+                flex-direction: row;
+                align-items: center;
+                justify-content: space-between;
+                gap: 12px;
+            }
+            .card::before {
+                width: 100%;
+                height: 3px;
+            }
+            .card-top {
+                flex: 1;
+            }
+            .card-value .num {
+                font-size: 28px;
+            }
+            /* 标题与状态纵向堆叠 */
+            .header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 8px;
+                padding: 16px 0 14px;
+                margin-bottom: 16px;
+            }
+            .header h1 {
+                font-size: 17px;
+            }
+            .header-right {
+                width: 100%;
+                justify-content: space-between;
+                gap: 10px;
+            }
+            .status {
+                font-size: 12px;
+            }
+            /* 图表更短，避免上下滚动 */
+            .chart-section {
+                padding: 12px;
+            }
+            #chart {
+                height: 260px;
+            }
+            /* 设置项紧凑化 */
+            .field input[type="text"],
+            .field input[type="password"],
+            .field input[type="number"],
+            .field input[type="time"],
+            .field select {
+                padding: 11px 12px;
+                font-size: 16px; /* 避免 iOS 自动缩放 */
+            }
+            .section {
+                gap: 10px;
+            }
+            /* 登录/确认弹窗紧凑化 */
+            .login-overlay .modal,
+            .confirm-overlay .modal {
+                max-width: 100%;
+            }
+        }
+
+        /* ===== 超小屏 (≤360px) ===== */
+        @media (max-width: 360px) {
+            .container {
+                padding: 8px;
+            }
+            .card-value .num {
+                font-size: 24px;
+            }
+            .range-selector button {
+                min-width: 48px;
+                padding: 7px 8px;
+                font-size: 12px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -1433,6 +1579,7 @@
                 chart = echarts.init(document.getElementById("chart"), null, {
                     renderer: "canvas"
                 });
+                var isMobile = window.innerWidth <= 768;
                 var option = {
                     backgroundColor: "transparent",
                     color: ["#42a5f5", "#ff7043", "#ab47bc", "#00e676"],
@@ -1440,11 +1587,12 @@
                         top: 50,
                         left: 12,
                         right: 12,
-                        bottom: 70,
+                        bottom: isMobile ? 80 : 70,
                         containLabel: true
                     },
                     tooltip: {
                         trigger: "axis",
+                        confine: true,
                         backgroundColor: "rgba(22, 27, 34, 0.95)",
                         borderColor: "#30363d",
                         borderWidth: 1,
@@ -1479,11 +1627,14 @@
                     legend: {
                         data: ["湿度", "温度", "PM2.5", "甲醛"],
                         top: 8,
+                        type: isMobile ? "scroll" : "plain",
                         textStyle: { color: "#8b949e", fontSize: 12 },
                         inactiveColor: "#444c56",
                         itemWidth: 14,
                         itemHeight: 10,
-                        itemGap: 18
+                        itemGap: isMobile ? 10 : 18,
+                        pageIconColor: "#00e676",
+                        pageTextStyle: { color: "#8b949e" }
                     },
                     xAxis: {
                         type: "time",
@@ -1517,7 +1668,7 @@
                         {
                             type: "slider",
                             bottom: 12,
-                            height: 22,
+                            height: isMobile ? 28 : 22,
                             backgroundColor: "#0d1117",
                             borderColor: "#30363d",
                             fillerColor: "rgba(0, 230, 118, 0.12)",
@@ -1588,8 +1739,23 @@
                     ]
                 };
                 chart.setOption(option);
+                var lastMobile = isMobile;
                 window.addEventListener("resize", function () {
-                    if (chart) { chart.resize(); }
+                    if (!chart) { return; }
+                    chart.resize();
+                    // 横竖屏切换跨越 768px 时，重新应用响应式配置
+                    var nowMobile = window.innerWidth <= 768;
+                    if (nowMobile !== lastMobile) {
+                        lastMobile = nowMobile;
+                        chart.setOption({
+                            grid: { bottom: nowMobile ? 80 : 70 },
+                            legend: {
+                                type: nowMobile ? "scroll" : "plain",
+                                itemGap: nowMobile ? 10 : 18
+                            },
+                            dataZoom: [{ height: nowMobile ? 28 : 22 }, {}]
+                        });
+                    }
                 });
             }
 
