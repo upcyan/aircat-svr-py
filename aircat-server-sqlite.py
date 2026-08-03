@@ -25,7 +25,6 @@ GET_MSG = b'\xaaO\x01%F\x119\x8f\x0b\x00\x00\x00\x00\x00\x00\x00\x00\xb0\xf8\x93
 DB_PATH = os.environ.get('DB_PATH', '/data/aircat.db')
 WEB_PORT = int(os.environ.get('WEB_PORT', '8080'))
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STATIC_DIR = os.path.join(_BASE_DIR, 'aircat-server-py', 'static')
 TEMPLATE_FILE = os.path.join(_BASE_DIR, 'aircat-server-py', 'templates', 'sqlite.html')
 
 # ========== 日志配置（通过环境变量控制） ==========
@@ -441,23 +440,6 @@ except Exception as e:
     _log(f"Failed to load template {TEMPLATE_FILE}: {e}", 1)
     _INDEX_HTML = '<html><body><h1>M1 Air Monitor</h1><p>Template not found.</p></body></html>'
 
-# MIME 类型映射
-_MIME_TYPES = {
-    '.html': 'text/html; charset=utf-8',
-    '.css': 'text/css; charset=utf-8',
-    '.js': 'application/javascript; charset=utf-8',
-    '.json': 'application/json; charset=utf-8',
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif',
-    '.svg': 'image/svg+xml',
-    '.ttf': 'font/ttf',
-    '.woff': 'font/woff',
-    '.woff2': 'font/woff2',
-    '.ico': 'image/x-icon',
-}
-
 # 允许通过 /api/settings 更新的键
 _SETTING_KEYS = [
     'max_records', 'retention_days', 'auth_enabled',
@@ -489,30 +471,6 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
-
-    def _serve_static(self, rel_path):
-        """提供静态文件服务（防止路径穿越）"""
-        full_path = os.path.normpath(os.path.join(STATIC_DIR, rel_path))
-        static_root = os.path.normpath(STATIC_DIR)
-        if not full_path.startswith(static_root + os.sep) and full_path != static_root:
-            self.send_error(403, 'Forbidden')
-            return
-        if not os.path.isfile(full_path):
-            self.send_error(404, 'Not Found')
-            return
-        ext = os.path.splitext(full_path)[1].lower()
-        mime = _MIME_TYPES.get(ext, 'application/octet-stream')
-        try:
-            with open(full_path, 'rb') as f:
-                content = f.read()
-            self.send_response(200)
-            self.send_header('Content-Type', mime)
-            self.send_header('Content-Length', str(len(content)))
-            self.end_headers()
-            self.wfile.write(content)
-        except Exception as e:
-            _log(f"Static file error: {full_path} - {e}", 2)
-            self.send_error(500, 'Internal Server Error')
 
     def _read_json_body(self):
         """读取并解析请求体 JSON，返回 dict 或 None"""
@@ -583,8 +541,6 @@ class WebRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(db_manager.get_all_settings())
             else:
                 self._send_json({'error': 'database not initialized'}, 503)
-        elif path.startswith('/static/'):
-            self._serve_static(path[len('/static/'):])
         else:
             self.send_error(404, 'Not Found')
 

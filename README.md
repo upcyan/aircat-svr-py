@@ -54,17 +54,16 @@ aircat-svr-py/
 ├── aircat-server-lite.py          # Lite 版主程序
 ├── aircat-server-sqlite.py        # SQLite 版主程序（Socket + Web + SQLite）
 ├── aircat-server-py/
-│   ├── common/
-│   │   ├── function.py            # 工具函数
-│   │   └── sql.conf               # 配置文件
-│   ├── static/                    # 静态资源（CSS、JS、图片）
 │   └── templates/
-│       └── sqlite.html            # SQLite 版 Web 界面
+│       └── sqlite.html            # SQLite 版 Web 界面（自包含，内联 CSS/JS）
 ├── docker-yaml/
 │   ├── docker-lite/
 │   │   └── docker-compose.yml     # Lite 版 Docker Compose
 │   └── docker-sqlite/
 │       └── docker-compose.yml     # SQLite 版 Docker Compose
+├── .github/
+│   └── workflows/
+│       └── docker-build.yml       # GitHub Actions 自动构建双镜像
 ├── lite.Dockerfile                # Lite 版 Docker 镜像
 ├── sqlite.Dockerfile              # SQLite 版 Docker 镜像
 ├── VERSION                        # 版本号
