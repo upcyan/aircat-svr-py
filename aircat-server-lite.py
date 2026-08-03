@@ -6,7 +6,6 @@ import json
 import re
 import logging
 import os
-from common import function
 
 # ========== 配置区 ==========
 time_sleep = 5        # 采集间隔（秒）
