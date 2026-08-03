@@ -1,0 +1,25 @@
+services:
+  aircat-server-sqlite:
+    image: upcyan/aircat-server-sqlite:latest
+    container_name: aircat-server-sqlite
+    ports:
+      - "9000:9000"
+      - "8080:8080"
+    environment:
+      - TZ=Asia/Shanghai
+      # 控制台日志级别: DEBUG/INFO/WARNING/ERROR, 默认 DEBUG
+      - LOG_LEVEL=DEBUG
+      # 是否写入日志文件: true/false, 默认 false
+      - LOG_FILE=false
+      # SQLite 数据库路径, 默认 /data/aircat.db
+      - DB_PATH=/data/aircat.db
+      # Web 界面端口, 默认 8080
+      - WEB_PORT=8080
+    volumes:
+      - ./data:/data
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
