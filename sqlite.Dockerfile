@@ -10,4 +10,4 @@ RUN mkdir -p /data
 
 VOLUME ["/data"]
 
-CMD [ "python", "aircat-server-sqlite.py" ]
+ENTRYPOINT ["python", "aircat-server-sqlite.py"]

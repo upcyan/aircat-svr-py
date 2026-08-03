@@ -25,6 +25,8 @@
             --temperature: #ff7043;
             --pm25: #ab47bc;
             --hcho: #00e676;
+            --danger: #ff5252;
+            --danger-dim: rgba(255, 82, 82, 0.15);
         }
 
         body {
@@ -72,6 +74,12 @@
             box-shadow: 0 0 12px var(--accent);
         }
 
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
         .status {
             font-size: 13px;
             color: var(--text-dim);
@@ -92,6 +100,38 @@
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.4; }
+        }
+
+        .gear-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: var(--bg-card);
+            color: var(--text-dim);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            padding: 0;
+        }
+
+        .gear-btn:hover {
+            color: var(--accent);
+            border-color: var(--accent);
+            background: var(--accent-dim);
+        }
+
+        .gear-btn svg {
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
+            transition: transform 0.4s ease;
+        }
+
+        .gear-btn:hover svg {
+            transform: rotate(60deg);
         }
 
         .cards {
@@ -259,6 +299,400 @@
             padding: 24px 0 12px;
         }
 
+        /* ===== Modal / Overlay ===== */
+        .overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.65);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
+        }
+
+        .overlay.show {
+            display: flex;
+            animation: fadeIn 0.18s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .modal {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            width: 100%;
+            max-width: 500px;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+            animation: slideUp 0.22s ease;
+        }
+
+        @keyframes slideUp {
+            from { transform: translateY(20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 18px 20px;
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            background: var(--bg-card);
+            z-index: 1;
+        }
+
+        .modal-header h2 {
+            font-size: 17px;
+            font-weight: 600;
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .modal-header h2::before {
+            content: "";
+            width: 6px;
+            height: 18px;
+            background: var(--accent);
+            border-radius: 3px;
+        }
+
+        .modal-close {
+            width: 30px;
+            height: 30px;
+            border-radius: 8px;
+            border: none;
+            background: transparent;
+            color: var(--text-dim);
+            font-size: 22px;
+            line-height: 1;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-close:hover {
+            background: var(--bg-card-hover);
+            color: var(--text);
+        }
+
+        .modal-body {
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 22px;
+        }
+
+        .section {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .section-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding-bottom: 6px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .field {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .field label {
+            font-size: 13px;
+            color: var(--text-dim);
+        }
+
+        .field input[type="text"],
+        .field input[type="password"],
+        .field input[type="number"],
+        .field select {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            padding: 9px 12px;
+            font-size: 14px;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+            width: 100%;
+        }
+
+        .field input:focus,
+        .field select:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-dim);
+        }
+
+        .field select {
+            cursor: pointer;
+            appearance: none;
+            -webkit-appearance: none;
+            background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%238b949e'><path d='M7 10l5 5 5-5z'/></svg>");
+            background-repeat: no-repeat;
+            background-position: right 8px center;
+            background-size: 20px;
+            padding-right: 36px;
+        }
+
+        .field-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .checkbox-field {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            user-select: none;
+            font-size: 14px;
+            color: var(--text);
+        }
+
+        .checkbox-field input[type="checkbox"] {
+            appearance: none;
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            border: 1px solid var(--border);
+            border-radius: 5px;
+            background: var(--bg);
+            cursor: pointer;
+            position: relative;
+            transition: all 0.2s ease;
+            flex-shrink: 0;
+        }
+
+        .checkbox-field input[type="checkbox"]:checked {
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+
+        .checkbox-field input[type="checkbox"]:checked::after {
+            content: "";
+            position: absolute;
+            left: 5px;
+            top: 1px;
+            width: 5px;
+            height: 10px;
+            border: solid #0d1117;
+            border-width: 0 2px 2px 0;
+            transform: rotate(45deg);
+        }
+
+        .auth-fields {
+            display: none;
+            flex-direction: column;
+            gap: 12px;
+            padding-left: 28px;
+            border-left: 2px solid var(--accent-dim);
+            margin-left: 2px;
+        }
+
+        .auth-fields.show {
+            display: flex;
+        }
+
+        .btn {
+            border: none;
+            border-radius: 9px;
+            padding: 10px 18px;
+            font-size: 14px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: #0d1117;
+        }
+
+        .btn-primary:hover {
+            background: #00c853;
+            box-shadow: 0 0 14px rgba(0, 230, 118, 0.5);
+        }
+
+        .btn-danger {
+            background: var(--danger);
+            color: #fff;
+        }
+
+        .btn-danger:hover {
+            background: #d32f2f;
+            box-shadow: 0 0 14px rgba(255, 82, 82, 0.5);
+        }
+
+        .btn-secondary {
+            background: var(--bg-card-hover);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            border-color: var(--text-dim);
+        }
+
+        .btn-block {
+            width: 100%;
+        }
+
+        .btn-sm {
+            padding: 7px 12px;
+            font-size: 13px;
+        }
+
+        .modal-footer {
+            padding: 16px 20px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            position: sticky;
+            bottom: 0;
+            background: var(--bg-card);
+        }
+
+        .msg {
+            font-size: 13px;
+            padding: 9px 12px;
+            border-radius: 8px;
+            display: none;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .msg.show { display: flex; }
+
+        .msg-success {
+            background: var(--accent-dim);
+            color: var(--accent);
+            border: 1px solid rgba(0, 230, 118, 0.3);
+        }
+
+        .msg-error {
+            background: var(--danger-dim);
+            color: var(--danger);
+            border: 1px solid rgba(255, 82, 82, 0.3);
+        }
+
+        /* ===== Login Overlay ===== */
+        .login-overlay .modal {
+            max-width: 380px;
+        }
+
+        .login-overlay .modal-header h2::before {
+            background: var(--humidity);
+        }
+
+        .login-form {
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .login-icon {
+            width: 56px;
+            height: 56px;
+            border-radius: 14px;
+            background: var(--accent-dim);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 4px;
+        }
+
+        .login-icon svg {
+            width: 28px;
+            height: 28px;
+            fill: var(--accent);
+        }
+
+        .login-subtitle {
+            text-align: center;
+            font-size: 13px;
+            color: var(--text-dim);
+            margin-bottom: 4px;
+        }
+
+        /* ===== Confirm Dialog ===== */
+        .confirm-overlay .modal {
+            max-width: 380px;
+        }
+
+        .confirm-body {
+            padding: 24px 20px;
+            text-align: center;
+        }
+
+        .confirm-icon {
+            width: 52px;
+            height: 52px;
+            border-radius: 50%;
+            background: var(--danger-dim);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 14px;
+        }
+
+        .confirm-icon svg {
+            width: 26px;
+            height: 26px;
+            fill: var(--danger);
+        }
+
+        .confirm-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 6px;
+        }
+
+        .confirm-text {
+            font-size: 13px;
+            color: var(--text-dim);
+            margin-bottom: 20px;
+        }
+
+        .confirm-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .confirm-actions .btn {
+            flex: 1;
+        }
+
         @media (max-width: 768px) {
             .container {
                 padding: 14px;
@@ -293,6 +727,18 @@
                 padding: 6px 10px;
                 font-size: 12px;
             }
+
+            .field-row {
+                grid-template-columns: 1fr;
+            }
+
+            .modal-footer {
+                flex-direction: column-reverse;
+            }
+
+            .modal-footer .btn {
+                width: 100%;
+            }
         }
 
         @media (max-width: 380px) {
@@ -306,9 +752,14 @@
     <div class="container">
         <div class="header">
             <h1>M1 空气质量监测</h1>
-            <div class="status">
-                <span class="dot"></span>
-                <span>最后更新：<span id="last-update">--</span></span>
+            <div class="header-right">
+                <div class="status">
+                    <span class="dot"></span>
+                    <span>最后更新：<span id="last-update">--</span></span>
+                </div>
+                <button class="gear-btn" id="settings-btn" title="设置" aria-label="设置">
+                    <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+                </button>
             </div>
         </div>
 
@@ -382,6 +833,120 @@
         <div class="footer">Phicomm M1 · 数据每 5 秒刷新，图表每 60 秒刷新</div>
     </div>
 
+    <!-- 设置弹窗 -->
+    <div class="overlay" id="settings-overlay">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+            <div class="modal-header">
+                <h2 id="settings-title">设置</h2>
+                <button class="modal-close" id="settings-close" aria-label="关闭">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- 认证设置 -->
+                <div class="section">
+                    <div class="section-title">认证设置</div>
+                    <label class="checkbox-field">
+                        <input type="checkbox" id="set-auth-enabled">
+                        <span>启用登录认证</span>
+                    </label>
+                    <div class="auth-fields" id="auth-fields">
+                        <div class="field">
+                            <label for="set-username">用户名</label>
+                            <input type="text" id="set-username" autocomplete="username" placeholder="请输入用户名">
+                        </div>
+                        <div class="field">
+                            <label for="set-password">密码</label>
+                            <input type="password" id="set-password" autocomplete="new-password" placeholder="留空则不修改">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 数据管理 -->
+                <div class="section">
+                    <div class="section-title">数据管理</div>
+                    <div class="field-row">
+                        <div class="field">
+                            <label for="set-max-records">最大记录数</label>
+                            <input type="number" id="set-max-records" min="1" step="1" value="10000">
+                        </div>
+                        <div class="field">
+                            <label for="set-retention-days">保存天数</label>
+                            <input type="number" id="set-retention-days" min="1" step="1" value="30">
+                        </div>
+                    </div>
+                    <button class="btn btn-danger btn-block" id="cleanup-btn">清理全部数据</button>
+                </div>
+
+                <!-- 调试设置 -->
+                <div class="section">
+                    <div class="section-title">调试设置</div>
+                    <div class="field">
+                        <label for="set-log-level">日志级别</label>
+                        <select id="set-log-level">
+                            <option value="DEBUG">DEBUG</option>
+                            <option value="INFO" selected>INFO</option>
+                            <option value="WARNING">WARNING</option>
+                            <option value="ERROR">ERROR</option>
+                        </select>
+                    </div>
+                    <label class="checkbox-field">
+                        <input type="checkbox" id="set-log-file">
+                        <span>写入日志文件</span>
+                    </label>
+                </div>
+
+                <div class="msg" id="settings-msg"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="settings-cancel">取消</button>
+                <button class="btn btn-primary" id="settings-save">保存设置</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 登录弹窗 -->
+    <div class="overlay login-overlay" id="login-overlay">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="login-title">
+            <div class="modal-header">
+                <h2 id="login-title">登录</h2>
+            </div>
+            <div class="modal-body">
+                <div class="login-icon">
+                    <svg viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+                </div>
+                <div class="login-subtitle">需要登录后才能查看数据</div>
+                <form class="login-form" id="login-form">
+                    <div class="field">
+                        <label for="login-username">用户名</label>
+                        <input type="text" id="login-username" autocomplete="username" required>
+                    </div>
+                    <div class="field">
+                        <label for="login-password">密码</label>
+                        <input type="password" id="login-password" autocomplete="current-password" required>
+                    </div>
+                    <div class="msg msg-error" id="login-msg"></div>
+                    <button type="submit" class="btn btn-primary btn-block" id="login-submit">登录</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- 确认弹窗 -->
+    <div class="overlay confirm-overlay" id="confirm-overlay">
+        <div class="modal" role="dialog" aria-modal="true">
+            <div class="confirm-body">
+                <div class="confirm-icon">
+                    <svg viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
+                </div>
+                <div class="confirm-title" id="confirm-title">确认操作</div>
+                <div class="confirm-text" id="confirm-text">确定要执行此操作吗？</div>
+                <div class="confirm-actions">
+                    <button class="btn btn-secondary" id="confirm-cancel">取消</button>
+                    <button class="btn btn-danger" id="confirm-ok">确认</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         (function () {
             "use strict";
@@ -390,7 +955,9 @@
             var chart = null;
             var latestTimer = null;
             var chartTimer = null;
+            var TOKEN_KEY = "aircat_token";
 
+            // ===== 工具函数 =====
             var fmt = function (v, digits) {
                 if (v === null || v === undefined || v === "" || isNaN(v)) {
                     return "--";
@@ -404,13 +971,304 @@
                 if (el) { el.textContent = text; }
             };
 
+            var getToken = function () {
+                try { return localStorage.getItem(TOKEN_KEY) || ""; }
+                catch (e) { return ""; }
+            };
+
+            var setToken = function (t) {
+                try {
+                    if (t) { localStorage.setItem(TOKEN_KEY, t); }
+                    else { localStorage.removeItem(TOKEN_KEY); }
+                } catch (e) {}
+            };
+
+            // 统一 API 请求：自动携带 token，401 时弹出登录
+            function apiFetch(url, options) {
+                options = options || {};
+                options.headers = options.headers || {};
+                // 保留已有 header
+                var headers = {};
+                if (options.headers instanceof Headers) {
+                    options.headers.forEach(function (v, k) { headers[k] = v; });
+                } else {
+                    headers = Object.assign({}, options.headers);
+                }
+                var token = getToken();
+                if (token && !headers["Authorization"]) {
+                    headers["Authorization"] = "Bearer " + token;
+                }
+                options.headers = headers;
+                return fetch(url, options).then(function (res) {
+                    if (res.status === 401) {
+                        showLogin();
+                        var err = new Error("Unauthorized");
+                        err.status = 401;
+                        throw err;
+                    }
+                    return res;
+                }).then(function (res) {
+                    if (!res.ok) {
+                        return res.text().then(function (txt) {
+                            var msg = txt;
+                            try { msg = JSON.parse(txt); } catch (e) {}
+                            var e = new Error("HTTP " + res.status);
+                            e.status = res.status;
+                            e.body = msg;
+                            throw e;
+                        });
+                    }
+                    return res.json();
+                });
+            }
+
+            // ===== 登录逻辑 =====
+            var loginOverlay = document.getElementById("login-overlay");
+            var loginForm = document.getElementById("login-form");
+            var loginMsg = document.getElementById("login-msg");
+            var loginSubmitBtn = document.getElementById("login-submit");
+
+            function showLogin() {
+                // 停止自动刷新，避免重复弹窗
+                stopTimers();
+                loginOverlay.classList.add("show");
+            }
+
+            function hideLogin() {
+                loginOverlay.classList.remove("show");
+            }
+
+            function showLoginMsg(text) {
+                loginMsg.textContent = text;
+                loginMsg.classList.add("show");
+            }
+
+            function hideLoginMsg() {
+                loginMsg.textContent = "";
+                loginMsg.classList.remove("show");
+            }
+
+            loginForm.addEventListener("submit", function (e) {
+                e.preventDefault();
+                hideLoginMsg();
+                var username = document.getElementById("login-username").value.trim();
+                var password = document.getElementById("login-password").value;
+                if (!username || !password) {
+                    showLoginMsg("请输入用户名和密码");
+                    return;
+                }
+                loginSubmitBtn.disabled = true;
+                loginSubmitBtn.textContent = "登录中...";
+                fetch("/api/login", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ username: username, password: password })
+                }).then(function (res) {
+                    return res.json().then(function (d) {
+                        return { status: res.status, data: d };
+                    });
+                }).then(function (r) {
+                    if (r.status === 200 && r.data && r.data.token) {
+                        setToken(r.data.token);
+                        hideLogin();
+                        document.getElementById("login-password").value = "";
+                        // 重新加载数据
+                        fetchLatest();
+                        fetchHistory(currentHours);
+                        startTimers();
+                    } else {
+                        showLoginMsg((r.data && r.data.message) || "登录失败");
+                    }
+                }).catch(function (err) {
+                    showLoginMsg("网络错误，请重试");
+                }).finally(function () {
+                    loginSubmitBtn.disabled = false;
+                    loginSubmitBtn.textContent = "登录";
+                });
+            });
+
+            // ===== 设置弹窗逻辑 =====
+            var settingsBtn = document.getElementById("settings-btn");
+            var settingsOverlay = document.getElementById("settings-overlay");
+            var settingsClose = document.getElementById("settings-close");
+            var settingsCancel = document.getElementById("settings-cancel");
+            var settingsSave = document.getElementById("settings-save");
+            var settingsMsg = document.getElementById("settings-msg");
+            var authEnabled = document.getElementById("set-auth-enabled");
+            var authFields = document.getElementById("auth-fields");
+            var cleanupBtn = document.getElementById("cleanup-btn");
+
+            function showSettingsMsg(text, type) {
+                settingsMsg.textContent = text;
+                settingsMsg.classList.remove("show", "msg-success", "msg-error");
+                settingsMsg.classList.add("show", type === "error" ? "msg-error" : "msg-success");
+                if (type !== "error") {
+                    setTimeout(function () {
+                        settingsMsg.classList.remove("show");
+                    }, 2500);
+                }
+            }
+
+            function hideSettingsMsg() {
+                settingsMsg.classList.remove("show");
+            }
+
+            // 认证开关切换
+            authEnabled.addEventListener("change", function () {
+                if (authEnabled.checked) {
+                    authFields.classList.add("show");
+                } else {
+                    authFields.classList.remove("show");
+                }
+            });
+
+            function openSettings() {
+                hideSettingsMsg();
+                settingsOverlay.classList.add("show");
+                loadSettings();
+            }
+
+            function closeSettings() {
+                settingsOverlay.classList.remove("show");
+            }
+
+            settingsBtn.addEventListener("click", openSettings);
+            settingsClose.addEventListener("click", closeSettings);
+            settingsCancel.addEventListener("click", closeSettings);
+
+            // 点击遮罩关闭设置
+            settingsOverlay.addEventListener("click", function (e) {
+                if (e.target === settingsOverlay) { closeSettings(); }
+            });
+
+            // ESC 关闭
+            document.addEventListener("keydown", function (e) {
+                if (e.key === "Escape") {
+                    if (settingsOverlay.classList.contains("show")) { closeSettings(); }
+                    if (confirmOverlay.classList.contains("show")) { closeConfirm(false); }
+                }
+            });
+
+            // 加载当前设置
+            function loadSettings() {
+                apiFetch("/api/settings", { method: "GET" }).then(function (d) {
+                    if (!d) { return; }
+                    authEnabled.checked = !!d.auth_enabled;
+                    if (authEnabled.checked) {
+                        authFields.classList.add("show");
+                    } else {
+                        authFields.classList.remove("show");
+                    }
+                    document.getElementById("set-username").value = d.username || "";
+                    document.getElementById("set-password").value = "";
+                    document.getElementById("set-max-records").value =
+                        (d.max_records !== undefined && d.max_records !== null) ? d.max_records : 10000;
+                    document.getElementById("set-retention-days").value =
+                        (d.retention_days !== undefined && d.retention_days !== null) ? d.retention_days : 30;
+                    var logLevel = document.getElementById("set-log-level");
+                    logLevel.value = d.log_level || "INFO";
+                    document.getElementById("set-log-file").checked = !!d.log_to_file;
+                }).catch(function (err) {
+                    if (err && err.status !== 401) {
+                        showSettingsMsg("加载设置失败", "error");
+                    }
+                });
+            }
+
+            // 保存设置
+            settingsSave.addEventListener("click", function () {
+                hideSettingsMsg();
+                var payload = {
+                    auth_enabled: authEnabled.checked,
+                    username: document.getElementById("set-username").value.trim(),
+                    max_records: parseInt(document.getElementById("set-max-records").value, 10) || 10000,
+                    retention_days: parseInt(document.getElementById("set-retention-days").value, 10) || 30,
+                    log_level: document.getElementById("set-log-level").value,
+                    log_to_file: document.getElementById("set-log-file").checked
+                };
+                var pwd = document.getElementById("set-password").value;
+                if (pwd) { payload.password = pwd; }
+
+                settingsSave.disabled = true;
+                settingsSave.textContent = "保存中...";
+                apiFetch("/api/settings", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                }).then(function (d) {
+                    showSettingsMsg("设置已保存", "success");
+                    document.getElementById("set-password").value = "";
+                }).catch(function (err) {
+                    if (err && err.status !== 401) {
+                        var m = "保存失败";
+                        if (err && err.body && err.body.message) { m = err.body.message; }
+                        showSettingsMsg(m, "error");
+                    }
+                }).finally(function () {
+                    settingsSave.disabled = false;
+                    settingsSave.textContent = "保存设置";
+                });
+            });
+
+            // ===== 清理数据（带确认弹窗） =====
+            var confirmOverlay = document.getElementById("confirm-overlay");
+            var confirmOk = document.getElementById("confirm-ok");
+            var confirmCancel = document.getElementById("confirm-cancel");
+            var confirmTitle = document.getElementById("confirm-title");
+            var confirmText = document.getElementById("confirm-text");
+            var confirmCallback = null;
+
+            function showConfirm(title, text, cb) {
+                confirmTitle.textContent = title;
+                confirmText.textContent = text;
+                confirmCallback = cb;
+                confirmOverlay.classList.add("show");
+            }
+
+            function closeConfirm(result) {
+                confirmOverlay.classList.remove("show");
+                var cb = confirmCallback;
+                confirmCallback = null;
+                if (cb) { cb(result); }
+            }
+
+            confirmOk.addEventListener("click", function () { closeConfirm(true); });
+            confirmCancel.addEventListener("click", function () { closeConfirm(false); });
+            confirmOverlay.addEventListener("click", function (e) {
+                if (e.target === confirmOverlay) { closeConfirm(false); }
+            });
+
+            cleanupBtn.addEventListener("click", function () {
+                showConfirm("清理全部数据", "此操作将永久删除所有历史数据，且不可恢复，确定继续？", function (ok) {
+                    if (!ok) { return; }
+                    cleanupBtn.disabled = true;
+                    cleanupBtn.textContent = "清理中...";
+                    apiFetch("/api/cleanup", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({})
+                    }).then(function (d) {
+                        showSettingsMsg("数据已清理", "success");
+                        // 刷新图表
+                        fetchHistory(currentHours);
+                        fetchLatest();
+                    }).catch(function (err) {
+                        if (err && err.status !== 401) {
+                            var m = "清理失败";
+                            if (err && err.body && err.body.message) { m = err.body.message; }
+                            showSettingsMsg(m, "error");
+                        }
+                    }).finally(function () {
+                        cleanupBtn.disabled = false;
+                        cleanupBtn.textContent = "清理全部数据";
+                    });
+                });
+            });
+
+            // ===== 数据卡片 & 图表 =====
             // 获取最新数据并更新卡片
             function fetchLatest() {
-                fetch("/api/latest", { cache: "no-store" })
-                    .then(function (res) {
-                        if (!res.ok) { throw new Error("HTTP " + res.status); }
-                        return res.json();
-                    })
+                apiFetch("/api/latest", { cache: "no-store" })
                     .then(function (d) {
                         if (!d) { return; }
                         setText("val-humidity", fmt(d.humidity, 1));
@@ -422,7 +1280,9 @@
                         }
                     })
                     .catch(function (err) {
-                        console.error("fetchLatest error:", err);
+                        if (err && err.status !== 401) {
+                            console.error("fetchLatest error:", err);
+                        }
                     });
             }
 
@@ -444,11 +1304,7 @@
             // 获取历史数据并更新图表
             function fetchHistory(hours) {
                 var url = "/api/history?hours=" + encodeURIComponent(hours);
-                fetch(url, { cache: "no-store" })
-                    .then(function (res) {
-                        if (!res.ok) { throw new Error("HTTP " + res.status); }
-                        return res.json();
-                    })
+                apiFetch(url, { cache: "no-store" })
                     .then(function (arr) {
                         if (!arr || !arr.length) {
                             updateChart([], [], [], [], []);
@@ -472,7 +1328,9 @@
                         updateChart(times, humidity, temperature, pm25, hcho);
                     })
                     .catch(function (err) {
-                        console.error("fetchHistory error:", err);
+                        if (err && err.status !== 401) {
+                            console.error("fetchHistory error:", err);
+                        }
                     });
             }
 
@@ -682,6 +1540,11 @@
                 chartTimer = setInterval(function () {
                     fetchHistory(currentHours);
                 }, 60000);
+            }
+
+            function stopTimers() {
+                if (latestTimer) { clearInterval(latestTimer); latestTimer = null; }
+                if (chartTimer) { clearInterval(chartTimer); chartTimer = null; }
             }
 
             function init() {

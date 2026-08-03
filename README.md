@@ -30,6 +30,10 @@
 - 历史数据折线图（ECharts），支持点击图例隐藏/显示各项数据
 - 时间范围切换：1小时 / 6小时 / 24小时 / 7天
 - 实时数据自动刷新（5秒更新卡片，60秒更新图表）
+- 数据量限制与自动清理（可配置最大记录数和保存天数）
+- Web 设置面板（认证、数据管理、调试设置）
+- 可选用户名密码认证（默认不启用）
+- 支持 Docker 命令行重置用户名密码
 
 ## 技术栈
 
@@ -119,7 +123,7 @@ services:
 # 拉取镜像
 docker pull upcyan/aircat-server-sqlite:latest
 
-# 运行容器
+# 运行容器（默认不启用认证）
 docker run -d \
   --name aircat-server-sqlite \
   -p 9000:9000 \
@@ -133,11 +137,33 @@ docker run -d \
   --restart always \
   upcyan/aircat-server-sqlite:latest
 
-# 查看 Web 界面
-# 浏览器访问 http://服务器IP:8080
-
 # 查看日志
 docker logs -f aircat-server-sqlite
+```
+
+首次启动时通过环境变量配置认证（可选）：
+
+```bash
+docker run -d \
+  --name aircat-server-sqlite \
+  -p 9000:9000 \
+  -p 8080:8080 \
+  -e TZ=Asia/Shanghai \
+  -e AUTH_USER=admin \
+  -e AUTH_PASS=yourpassword \
+  -v ./data:/data \
+  --restart always \
+  upcyan/aircat-server-sqlite:latest
+```
+
+#### 重置用户名和密码
+
+```bash
+# 重置用户名
+docker exec -it aircat-server-sqlite resetname
+
+# 重置密码
+docker exec -it aircat-server-sqlite resetpasswd
 ```
 
 #### Docker Compose 部署
@@ -156,6 +182,10 @@ services:
       - LOG_FILE=false
       - DB_PATH=/data/aircat.db
       - WEB_PORT=8080
+      # 可选: 首次启动设置用户名（留空则不启用认证）
+      # - AUTH_USER=admin
+      # 可选: 首次启动设置密码（设置后自动启用认证）
+      # - AUTH_PASS=yourpassword
     volumes:
       - ./data:/data
     restart: always
@@ -167,6 +197,14 @@ services:
 ```
 
 启动后访问 `http://服务器IP:8080` 即可查看 Web 界面。
+
+#### Web 设置面板
+
+点击页面右上角齿轮图标打开设置面板，支持：
+
+- **认证设置**：启用/关闭登录认证，设置用户名和密码
+- **数据管理**：设置最大记录数（超出自动覆盖）、保存天数（超期自动清理）、手动清理全部数据
+- **调试设置**：切换日志级别（DEBUG/INFO/WARNING/ERROR）、开启/关闭日志文件
 
 ### 本地构建
 
@@ -213,6 +251,10 @@ python aircat-server-sqlite.py
 |----------|--------|------|
 | `DB_PATH` | `/data/aircat.db` | SQLite 数据库文件路径 |
 | `WEB_PORT` | `8080` | Web 界面端口 |
+| `AUTH_USER` | （空） | 首次启动设置用户名，留空则不启用认证 |
+| `AUTH_PASS` | （空） | 首次启动设置密码，设置后自动启用认证 |
+
+> `AUTH_USER` 和 `AUTH_PASS` 仅在首次启动时写入数据库，后续修改请通过 Web 设置面板或 `docker exec` 命令。
 
 ### 配置示例
 
@@ -248,11 +290,30 @@ CREATE TABLE sensor_data (
 
 ## Web API（SQLite 版）
 
-| 接口 | 方法 | 说明 |
-|------|------|------|
-| `/` | GET | Web 界面页面 |
-| `/api/latest` | GET | 获取最新一条数据记录 |
-| `/api/history?hours=24` | GET | 获取指定小时数内的历史数据 |
+| 接口 | 方法 | 认证 | 说明 |
+|------|------|------|------|
+| `/` | GET | 可选 | Web 界面页面 |
+| `/api/latest` | GET | 可选 | 获取最新一条数据记录 |
+| `/api/history?hours=24` | GET | 可选 | 获取指定小时数内的历史数据 |
+| `/api/settings` | GET | 需要 | 获取当前设置 |
+| `/api/settings` | POST | 需要 | 更新设置（最大记录数、保存天数、认证、日志等） |
+| `/api/cleanup` | POST | 需要 | 清理全部传感器数据 |
+| `/api/login` | POST | 不需要 | 登录认证，返回 token |
+
+### 数据管理配置（SQLite 版）
+
+通过 Web 设置面板或 API 配置，所有设置持久化在 SQLite 数据库中：
+
+| 设置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `max_records` | 10000 | 最大记录数，超出后自动删除最早记录 |
+| `retention_days` | 30 | 保存天数，超期记录自动清理 |
+| `auth_enabled` | 0 | 是否启用登录认证（0=关闭，1=开启） |
+| `auth_user` | （空） | 登录用户名 |
+| `log_level` | `DEBUG` | 日志级别（可通过 Web 面板动态修改） |
+| `log_file` | 0 | 是否写入日志文件（0=关闭，1=开启） |
+
+> 数据清理由后台线程每 5 分钟自动执行一次，同时每次插入数据后也会检查。
 
 ## Docker Hub 仓库
 

@@ -7,6 +7,7 @@ import re
 import logging
 import os
 import sqlite3
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -40,6 +41,10 @@ _LEVEL_MAP = {
     'ERROR': logging.ERROR
 }
 
+# 日志格式（供运行时新增 Handler 复用）
+_LOG_FORMATTER = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s : %(message)s')
+
+
 def setup_logger():
     """配置日志，避免重复添加Handler"""
     logger = logging.getLogger('PhicommM1 Server')
@@ -49,12 +54,10 @@ def setup_logger():
     if logger.handlers:
         return logger
 
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s : %(message)s')
-
     # 控制台输出
     console_handler = logging.StreamHandler()
     console_handler.setLevel(level)
-    console_handler.setFormatter(formatter)
+    console_handler.setFormatter(_LOG_FORMATTER)
     logger.addHandler(console_handler)
 
     # 文件输出（默认关闭）
@@ -64,7 +67,7 @@ def setup_logger():
         log_file = os.path.join(log_dir, time.strftime('%Y-%m-%d') + '.log')
         file_handler = logging.FileHandler(filename=log_file, encoding='utf8')
         file_handler.setLevel(level)
-        file_handler.setFormatter(formatter)
+        file_handler.setFormatter(_LOG_FORMATTER)
         logger.addHandler(file_handler)
 
     return logger
@@ -83,6 +86,48 @@ def _log(message, level=0):
     levels.get(level, logger.info)(message)
 
 
+def apply_log_settings():
+    """根据数据库中的当前设置，立即更新 logger 级别与文件输出"""
+    if db_manager is None:
+        return
+    try:
+        level_str = str(db_manager.get_setting('log_level')).upper()
+        log_file_val = db_manager.get_setting('log_file')
+    except Exception as e:
+        _log(f"apply_log_settings read settings failed: {e}", 2)
+        return
+
+    level = _LEVEL_MAP.get(level_str, logging.DEBUG)
+    logger.setLevel(level)
+    # 同步已有 Handler 的级别
+    for h in logger.handlers:
+        h.setLevel(level)
+
+    # 处理文件 Handler 的动态增删
+    has_file_handler = any(isinstance(h, logging.FileHandler) for h in logger.handlers)
+    if log_file_val == 1 and not has_file_handler:
+        try:
+            log_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'logs')
+            os.makedirs(log_dir, exist_ok=True)
+            log_file = os.path.join(log_dir, time.strftime('%Y-%m-%d') + '.log')
+            file_handler = logging.FileHandler(filename=log_file, encoding='utf8')
+            file_handler.setLevel(level)
+            file_handler.setFormatter(_LOG_FORMATTER)
+            logger.addHandler(file_handler)
+            _log(f"File logging enabled: {log_file}", 3)
+        except Exception as e:
+            _log(f"Failed to add file handler: {e}", 2)
+    elif log_file_val == 0 and has_file_handler:
+        for h in logger.handlers[:]:
+            if isinstance(h, logging.FileHandler):
+                logger.removeHandler(h)
+                try:
+                    h.close()
+                except Exception:
+                    pass
+                _log("File logging disabled", 3)
+
+
 # ========== 工具函数 ==========
 def cut(num, decimals):
     """
@@ -97,6 +142,32 @@ def cut(num, decimals):
 
 
 # ========== SQLite 数据库管理 ==========
+# 设置项的类型映射（用于 get_setting 返回正确的类型）
+_SETTING_TYPES = {
+    'max_records': int,
+    'retention_days': int,
+    'auth_enabled': int,
+    'auth_user': str,
+    'auth_pass': str,
+    'log_level': str,
+    'log_file': int,
+}
+
+# 设置项的默认值（log_level / log_file 初始从环境变量读取）
+_SETTING_DEFAULTS = {
+    'max_records': 10000,
+    'retention_days': 30,
+    'auth_enabled': 0,
+    'auth_user': '',
+    'auth_pass': '',
+    'log_level': os.environ.get('LOG_LEVEL', 'DEBUG').upper(),
+    'log_file': 1 if os.environ.get('LOG_FILE', 'false').lower() == 'true' else 0,
+}
+
+# 清理后台线程的执行间隔（秒）
+CLEANUP_INTERVAL = 300  # 5 分钟
+
+
 class DatabaseManager:
     """SQLite 数据库管理器（线程安全）"""
 
@@ -111,7 +182,10 @@ class DatabaseManager:
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._init_db()
+        self._init_settings_table()
         _log(f"SQLite database initialized at {db_path}", 0)
+        # 启动后台清理线程
+        self._start_cleanup_thread()
 
     def _init_db(self):
         """初始化数据表"""
@@ -129,14 +203,86 @@ class DatabaseManager:
             ''')
             self.conn.commit()
 
+    def _init_settings_table(self):
+        """初始化设置表并写入默认值（首次启动时支持环境变量覆盖）"""
+        with self.lock:
+            self.conn.execute('''
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            ''')
+
+            # 判断是否为首次启动（表中无任何设置）
+            cur = self.conn.execute('SELECT COUNT(*) FROM settings')
+            first_start = cur.fetchone()[0] == 0
+
+            defaults = dict(_SETTING_DEFAULTS)
+            if first_start:
+                # 首次启动时支持通过环境变量设置用户名/密码
+                auth_user_env = os.environ.get('AUTH_USER')
+                auth_pass_env = os.environ.get('AUTH_PASS')
+                if auth_user_env is not None:
+                    defaults['auth_user'] = auth_user_env
+                if auth_pass_env is not None:
+                    defaults['auth_pass'] = auth_pass_env
+                    defaults['auth_enabled'] = 1
+
+            # 仅插入尚不存在的键（保留已有配置，重启后不丢失）
+            for key, value in defaults.items():
+                cur = self.conn.execute('SELECT value FROM settings WHERE key=?', (key,))
+                if cur.fetchone() is None:
+                    self.conn.execute(
+                        'INSERT INTO settings (key, value) VALUES (?, ?)',
+                        (key, str(value))
+                    )
+            self.conn.commit()
+
+    # ---------- 设置读写 ----------
+    def get_setting(self, key):
+        """读取单个设置项，按类型映射返回正确的类型"""
+        with self.lock:
+            cur = self.conn.execute('SELECT value FROM settings WHERE key=?', (key,))
+            row = cur.fetchone()
+        if row is None:
+            return _SETTING_DEFAULTS.get(key)
+        raw = row[0]
+        type_fn = _SETTING_TYPES.get(key, str)
+        if type_fn is int:
+            try:
+                return int(raw)
+            except (ValueError, TypeError):
+                return _SETTING_DEFAULTS.get(key, 0)
+        return raw
+
+    def set_setting(self, key, value):
+        """更新单个设置项（upsert）"""
+        with self.lock:
+            self.conn.execute(
+                'INSERT INTO settings (key, value) VALUES (?, ?) '
+                'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                (key, str(value))
+            )
+            self.conn.commit()
+
+    def get_all_settings(self):
+        """返回全部设置项的字典（按类型映射）"""
+        result = {}
+        for key in _SETTING_DEFAULTS:
+            result[key] = self.get_setting(key)
+        return result
+
+    # ---------- 数据读写 ----------
     def insert(self, humidity, temperature, pm25, hcho, client_ip):
-        """插入一条数据记录（线程安全）"""
+        """插入一条数据记录（线程安全），插入后执行清理策略"""
         with self.lock:
             self.conn.execute(
                 'INSERT INTO sensor_data (humidity, temperature, pm25, hcho, client_ip) VALUES (?, ?, ?, ?, ?)',
                 (humidity, temperature, pm25, hcho, client_ip)
             )
             self.conn.commit()
+        # 锁已释放，执行清理（读取当前设置）
+        self.cleanup_data()
 
     def get_latest(self):
         """获取最新一条记录"""
@@ -156,9 +302,113 @@ class DatabaseManager:
             )
             return [dict(r) for r in cur.fetchall()]
 
+    def get_record_count(self):
+        """获取当前数据记录总数"""
+        with self.lock:
+            cur = self.conn.execute('SELECT COUNT(*) FROM sensor_data')
+            return cur.fetchone()[0]
+
+    def cleanup_data(self):
+        """按保留策略清理数据：删除超过保留期的记录，并裁剪超出上限的旧记录。返回被删除的条数"""
+        deleted = 0
+        max_records = self.get_setting('max_records')
+        retention_days = self.get_setting('retention_days')
+
+        with self.lock:
+            # 1. 删除超过保留期的记录
+            if retention_days and retention_days > 0:
+                cur = self.conn.execute(
+                    'DELETE FROM sensor_data WHERE timestamp < datetime("now", ?)',
+                    (f'-{retention_days} days',)
+                )
+                deleted += cur.rowcount
+
+            # 2. 删除超出上限的旧记录
+            if max_records and max_records > 0:
+                cur = self.conn.execute('SELECT COUNT(*) FROM sensor_data')
+                count = cur.fetchone()[0]
+                if count > max_records:
+                    excess = count - max_records
+                    self.conn.execute(
+                        'DELETE FROM sensor_data WHERE id IN ('
+                        'SELECT id FROM sensor_data ORDER BY id ASC LIMIT ?'
+                        ')',
+                        (excess,)
+                    )
+                    deleted += excess
+            self.conn.commit()
+        return deleted
+
+    def clear_all_data(self):
+        """清空全部传感器数据，返回被删除的条数"""
+        with self.lock:
+            cur = self.conn.execute('DELETE FROM sensor_data')
+            self.conn.commit()
+            return cur.rowcount
+
+    # ---------- 后台清理线程 ----------
+    def _start_cleanup_thread(self):
+        """启动后台守护线程，定期执行清理"""
+        t = threading.Thread(target=self._cleanup_loop, daemon=True)
+        t.start()
+        _log("Background cleanup thread started (interval=300s)", 3)
+
+    def _cleanup_loop(self):
+        """后台清理循环：每 5 分钟读取当前设置并执行清理"""
+        while True:
+            try:
+                time.sleep(CLEANUP_INTERVAL)
+                deleted = self.cleanup_data()
+                if deleted > 0:
+                    _log(f"Cleanup: deleted {deleted} expired/over-limit records", 3)
+            except Exception as e:
+                _log(f"Cleanup thread error: {e}", 2)
+
 
 # 全局数据库实例（在 main 中初始化）
 db_manager = None
+
+
+# ========== 认证系统 ==========
+# token -> 过期时间戳（概念上为带过期的 token 集合）
+_auth_tokens = {}
+_auth_lock = threading.Lock()
+TOKEN_EXPIRY = 3600  # 1 小时
+
+
+def generate_token(username, password):
+    """生成简单的 token：md5(username + password + timestamp)"""
+    raw = (str(username) + str(password) + str(time.time())).encode('utf-8')
+    return hashlib.md5(raw).hexdigest()
+
+
+def add_token(token):
+    """登记一个 token，1 小时后过期"""
+    with _auth_lock:
+        _auth_tokens[token] = time.time() + TOKEN_EXPIRY
+
+
+def is_valid_token(token):
+    """校验 token 是否有效（存在且未过期）"""
+    if not token:
+        return False
+    with _auth_lock:
+        expiry = _auth_tokens.get(token)
+        if expiry is None:
+            return False
+        if time.time() > expiry:
+            _auth_tokens.pop(token, None)
+            return False
+        return True
+
+
+def cleanup_tokens():
+    """清理已过期的 token"""
+    with _auth_lock:
+        now = time.time()
+        expired = [t for t, exp in _auth_tokens.items() if now > exp]
+        for t in expired:
+            del _auth_tokens[t]
 
 
 # ========== HTTP Web 服务 ==========
@@ -188,6 +438,12 @@ _MIME_TYPES = {
     '.woff2': 'font/woff2',
     '.ico': 'image/x-icon',
 }
+
+# 允许通过 /api/settings 更新的键
+_SETTING_KEYS = [
+    'max_records', 'retention_days', 'auth_enabled',
+    'auth_user', 'auth_pass', 'log_level', 'log_file'
+]
 
 
 class WebRequestHandler(BaseHTTPRequestHandler):
@@ -237,10 +493,44 @@ class WebRequestHandler(BaseHTTPRequestHandler):
             _log(f"Static file error: {full_path} - {e}", 2)
             self.send_error(500, 'Internal Server Error')
 
+    def _read_json_body(self):
+        """读取并解析请求体 JSON，返回 dict 或 None"""
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+        except (ValueError, TypeError):
+            content_length = 0
+        body = self.rfile.read(content_length) if content_length else b''
+        if not body:
+            return None
+        try:
+            return json.loads(body.decode('utf-8'))
+        except Exception:
+            return None
+
+    def _is_authorized(self):
+        """鉴权：auth 关闭时放行；开启时校验 Bearer token"""
+        if db_manager is None:
+            return True
+        try:
+            if db_manager.get_setting('auth_enabled') != 1:
+                return True
+        except Exception:
+            return True
+        auth_header = self.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer '):
+            token = auth_header[len('Bearer '):].strip()
+            return is_valid_token(token)
+        return False
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
         query = parse_qs(parsed.query)
+
+        # 鉴权：除 /api/login（POST）外，所有路由均需校验
+        if not self._is_authorized():
+            self._send_json({'error': 'unauthorized'}, 401)
+            return
 
         if path == '/' or path == '/index.html':
             self._send_html(_INDEX_HTML)
@@ -267,10 +557,72 @@ class WebRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(records)
             else:
                 self._send_json({'error': 'database not initialized'}, 503)
+        elif path == '/api/settings':
+            if db_manager:
+                self._send_json(db_manager.get_all_settings())
+            else:
+                self._send_json({'error': 'database not initialized'}, 503)
         elif path.startswith('/static/'):
             self._serve_static(path[len('/static/'):])
         else:
             self.send_error(404, 'Not Found')
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        # /api/login 无需鉴权
+        if path == '/api/login':
+            data = self._read_json_body()
+            if not isinstance(data, dict):
+                self._send_json({'success': False}, 401)
+                return
+            username = data.get('username', '')
+            password = data.get('password', '')
+            auth_user = db_manager.get_setting('auth_user') if db_manager else ''
+            auth_pass = db_manager.get_setting('auth_pass') if db_manager else ''
+            if auth_user != '' and username == auth_user and password == auth_pass:
+                token = generate_token(username, password)
+                add_token(token)
+                cleanup_tokens()
+                self._send_json({'token': token, 'success': True})
+            else:
+                self._send_json({'success': False}, 401)
+            return
+
+        # 其余 POST 路由均需鉴权
+        if not self._is_authorized():
+            self._send_json({'error': 'unauthorized'}, 401)
+            return
+
+        if path == '/api/settings':
+            if not db_manager:
+                self._send_json({'error': 'database not initialized'}, 503)
+                return
+            data = self._read_json_body()
+            if not isinstance(data, dict):
+                self._send_json({'error': 'invalid json'}, 400)
+                return
+            changed = []
+            for key in _SETTING_KEYS:
+                if key in data:
+                    db_manager.set_setting(key, data[key])
+                    changed.append(key)
+            # 立即应用日志相关设置
+            if 'log_level' in changed or 'log_file' in changed:
+                apply_log_settings()
+            self._send_json({'success': True, 'settings': db_manager.get_all_settings()})
+            return
+
+        if path == '/api/cleanup':
+            if not db_manager:
+                self._send_json({'error': 'database not initialized'}, 503)
+                return
+            deleted = db_manager.clear_all_data()
+            self._send_json({'success': True, 'deleted': deleted})
+            return
+
+        self.send_error(404, 'Not Found')
 
 
 def start_web_server(port=WEB_PORT):
@@ -466,8 +818,41 @@ class M1Server:
 
 # ========== 主程序 ==========
 if __name__ == '__main__':
+    # ---------- CLI 命令：resetname / resetpasswd ----------
+    if len(sys.argv) > 1:
+        cmd = sys.argv[1]
+        if cmd == 'resetname':
+            db_manager = DatabaseManager(DB_PATH)
+            try:
+                new_user = input('Enter new username: ').strip()
+            except EOFError:
+                new_user = ''
+            if new_user:
+                db_manager.set_setting('auth_user', new_user)
+                print(f"Username updated to: {new_user}")
+            else:
+                print("Username not changed (empty input).")
+            sys.exit(0)
+        elif cmd == 'resetpasswd':
+            db_manager = DatabaseManager(DB_PATH)
+            try:
+                new_pass = input('Enter new password: ').strip()
+            except EOFError:
+                new_pass = ''
+            if new_pass:
+                db_manager.set_setting('auth_pass', new_pass)
+                print("Password updated successfully.")
+            else:
+                print("Password not changed (empty input).")
+            sys.exit(0)
+        # 其它参数则继续走正常启动流程
+
+    # ---------- 正常启动 ----------
     # 初始化数据库
     db_manager = DatabaseManager(DB_PATH)
+
+    # 立即应用数据库中的日志设置
+    apply_log_settings()
 
     # 启动 Web 服务器线程
     web_thread = threading.Thread(target=start_web_server, args=(WEB_PORT,), daemon=True)
