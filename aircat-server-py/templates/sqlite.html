@@ -1586,7 +1586,7 @@
                     grid: {
                         top: 50,
                         left: 12,
-                        right: 12,
+                        right: isMobile ? 55 : 12,
                         bottom: isMobile ? 80 : 70,
                         containLabel: true
                     },
@@ -1617,9 +1617,15 @@
                             html += "<br/>";
                             for (var i = 0; i < params.length; i++) {
                                 var p = params[i];
-                                html += p.marker + " " + p.seriesName + ": " +
-                                    (p.value === null || p.value === undefined ? "--" : p.value) +
-                                    "<br/>";
+                                var val = p.value;
+                                // [timestamp, value] 数组格式时取第二个元素
+                                if (Array.isArray(val)) { val = val[1]; }
+                                if (val === null || val === undefined) {
+                                    val = "--";
+                                } else if (typeof val === "number") {
+                                    val = val.toFixed(val < 1 ? 3 : (val < 10 ? 2 : 1));
+                                }
+                                html += p.marker + " " + p.seriesName + ": " + val + "<br/>";
                             }
                             return html;
                         }
@@ -1627,14 +1633,12 @@
                     legend: {
                         data: ["湿度", "温度", "PM2.5", "甲醛"],
                         top: 8,
-                        type: isMobile ? "scroll" : "plain",
-                        textStyle: { color: "#8b949e", fontSize: 12 },
+                        type: "plain",
+                        textStyle: { color: "#8b949e", fontSize: isMobile ? 11 : 12 },
                         inactiveColor: "#444c56",
-                        itemWidth: 14,
-                        itemHeight: 10,
-                        itemGap: isMobile ? 10 : 18,
-                        pageIconColor: "#00e676",
-                        pageTextStyle: { color: "#8b949e" }
+                        itemWidth: isMobile ? 12 : 14,
+                        itemHeight: isMobile ? 8 : 10,
+                        itemGap: isMobile ? 10 : 18
                     },
                     xAxis: {
                         type: "time",
@@ -1660,7 +1664,7 @@
                             position: "right",
                             axisLine: { show: false },
                             axisTick: { show: false },
-                            axisLabel: { color: "#8b949e", fontSize: 11 },
+                            axisLabel: { color: "#8b949e", fontSize: isMobile ? 10 : 11, width: 50, overflow: "truncate" },
                             splitLine: { show: false }
                         }
                     ],
@@ -1748,9 +1752,14 @@
                     if (nowMobile !== lastMobile) {
                         lastMobile = nowMobile;
                         chart.setOption({
-                            grid: { bottom: nowMobile ? 80 : 70 },
+                            grid: {
+                                right: nowMobile ? 55 : 12,
+                                bottom: nowMobile ? 80 : 70
+                            },
                             legend: {
-                                type: nowMobile ? "scroll" : "plain",
+                                textStyle: { fontSize: nowMobile ? 11 : 12 },
+                                itemWidth: nowMobile ? 12 : 14,
+                                itemHeight: nowMobile ? 8 : 10,
                                 itemGap: nowMobile ? 10 : 18
                             },
                             dataZoom: [{ height: nowMobile ? 28 : 22 }, {}]
