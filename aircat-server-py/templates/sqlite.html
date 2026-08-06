@@ -506,6 +506,23 @@
             transform: rotate(45deg);
         }
 
+        .field small {
+            display: block;
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        .field-hint {
+            font-size: 12px;
+            color: var(--text-muted);
+            line-height: 1.6;
+            padding: 8px 12px;
+            background: var(--bg);
+            border-radius: 6px;
+            border-left: 3px solid var(--accent);
+        }
+
         .auth-fields {
             display: none;
             flex-direction: column;
@@ -1035,6 +1052,36 @@
                     <button class="btn btn-danger btn-block" id="cleanup-btn">清理全部数据</button>
                 </div>
 
+                <!-- 数据降采样 -->
+                <div class="section">
+                    <div class="section-title">数据降采样</div>
+                    <label class="checkbox-field">
+                        <input type="checkbox" id="set-agg-enabled" checked>
+                        <span>启用自动降采样聚合</span>
+                    </label>
+                    <div class="field-row">
+                        <div class="field">
+                            <label for="set-agg-raw-days">原始数据保留天数</label>
+                            <input type="number" id="set-agg-raw-days" min="1" step="1" value="30">
+                            <small>5秒粒度的明细数据</small>
+                        </div>
+                        <div class="field">
+                            <label for="set-agg-hourly-days">小时聚合保留天数</label>
+                            <input type="number" id="set-agg-hourly-days" min="1" step="1" value="90">
+                            <small>1小时粒度的聚合数据</small>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label for="set-agg-daily-days">天级聚合保留天数</label>
+                        <input type="number" id="set-agg-daily-days" min="1" step="1" value="365">
+                        <small>1天粒度的聚合数据，超过此天数自动删除</small>
+                    </div>
+                    <div class="field-hint">
+                        策略：原始数据 → 小时级聚合 → 天级聚合，逐级降采样，节省存储空间。
+                        例如设置 30/90/365 表示：保留 30 天原始数据 + 90 天小时聚合 + 365 天天级聚合。
+                    </div>
+                </div>
+
                 <!-- 调试设置 -->
                 <div class="section">
                     <div class="section-title">调试设置</div>
@@ -1388,6 +1435,14 @@
                         (d.max_records !== undefined && d.max_records !== null) ? d.max_records : 10000;
                     document.getElementById("set-retention-days").value =
                         (d.retention_days !== undefined && d.retention_days !== null) ? d.retention_days : 30;
+                    // 降采样设置
+                    document.getElementById("set-agg-enabled").checked = d.agg_enabled == 1;
+                    document.getElementById("set-agg-raw-days").value =
+                        (d.agg_raw_days !== undefined && d.agg_raw_days !== null) ? d.agg_raw_days : 30;
+                    document.getElementById("set-agg-hourly-days").value =
+                        (d.agg_hourly_days !== undefined && d.agg_hourly_days !== null) ? d.agg_hourly_days : 90;
+                    document.getElementById("set-agg-daily-days").value =
+                        (d.agg_daily_days !== undefined && d.agg_daily_days !== null) ? d.agg_daily_days : 365;
                     var logLevel = document.getElementById("set-log-level");
                     logLevel.value = d.log_level || "INFO";
                     document.getElementById("set-log-file").checked = !!d.log_to_file;
@@ -1418,6 +1473,10 @@
                     username: document.getElementById("set-username").value.trim(),
                     max_records: parseInt(document.getElementById("set-max-records").value, 10) || 10000,
                     retention_days: parseInt(document.getElementById("set-retention-days").value, 10) || 30,
+                    agg_enabled: document.getElementById("set-agg-enabled").checked ? 1 : 0,
+                    agg_raw_days: parseInt(document.getElementById("set-agg-raw-days").value, 10) || 30,
+                    agg_hourly_days: parseInt(document.getElementById("set-agg-hourly-days").value, 10) || 90,
+                    agg_daily_days: parseInt(document.getElementById("set-agg-daily-days").value, 10) || 365,
                     log_level: document.getElementById("set-log-level").value,
                     log_to_file: document.getElementById("set-log-file").checked,
                     m1_brightness: parseInt(document.getElementById("setting-m1-brightness").value, 10),

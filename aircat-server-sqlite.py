@@ -156,9 +156,12 @@ _SETTING_TYPES = {
     'm1_timer_night_brightness': int,
     'm1_timer_day_start': str,
     'm1_timer_night_start': str,
+    'agg_enabled': int,
+    'agg_raw_days': int,
+    'agg_hourly_days': int,
+    'agg_daily_days': int,
 }
 
-# 设置项的默认值（log_level / log_file 初始从环境变量读取）
 _SETTING_DEFAULTS = {
     'max_records': 10000,
     'retention_days': 30,
@@ -173,6 +176,10 @@ _SETTING_DEFAULTS = {
     'm1_timer_night_brightness': 0,
     'm1_timer_day_start': '07:00',
     'm1_timer_night_start': '23:00',
+    'agg_enabled': 1,
+    'agg_raw_days': 30,
+    'agg_hourly_days': 90,
+    'agg_daily_days': 365,
 }
 
 # 清理后台线程的执行间隔（秒）
@@ -212,6 +219,22 @@ class DatabaseManager:
                     client_ip TEXT
                 )
             ''')
+            self.conn.execute('''
+                CREATE TABLE IF NOT EXISTS sensor_data_aggregated (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    level TEXT NOT NULL,
+                    timestamp DATETIME NOT NULL,
+                    avg_humidity REAL, avg_temperature REAL,
+                    avg_pm25 REAL, avg_hcho REAL,
+                    min_humidity REAL, max_humidity REAL,
+                    min_temperature REAL, max_temperature REAL,
+                    min_pm25 REAL, max_pm25 REAL,
+                    min_hcho REAL, max_hcho REAL,
+                    count INTEGER DEFAULT 0,
+                    UNIQUE(level, timestamp)
+                )
+            ''')
+            self.conn.execute('CREATE INDEX IF NOT EXISTS idx_agg_level_ts ON sensor_data_aggregated(level, timestamp)')
             self.conn.commit()
 
     def _init_settings_table(self):
@@ -327,13 +350,19 @@ class DatabaseManager:
             return cur.fetchone()[0]
 
     def cleanup_data(self):
-        """按保留策略清理数据：删除超过保留期的记录，并裁剪超出上限的旧记录。返回被删除的条数"""
+        """清理数据 + 自动降采样聚合。返回被删除/聚合的条数"""
         deleted = 0
+        aggregated = 0
         max_records = self.get_setting('max_records')
         retention_days = self.get_setting('retention_days')
+        agg_enabled = self.get_setting('agg_enabled')
 
         with self.lock:
-            # 1. 删除超过保留期的记录
+            # 1. 降采样聚合（先聚合再删除，避免数据丢失）
+            if agg_enabled:
+                aggregated = self._do_aggregation()
+
+            # 2. 删除超过保留期的原始记录
             if retention_days and retention_days > 0:
                 cur = self.conn.execute(
                     'DELETE FROM sensor_data WHERE timestamp < datetime("now", ?)',
@@ -341,7 +370,7 @@ class DatabaseManager:
                 )
                 deleted += cur.rowcount
 
-            # 2. 删除超出上限的旧记录
+            # 3. 删除超出上限的旧记录
             if max_records and max_records > 0:
                 cur = self.conn.execute('SELECT COUNT(*) FROM sensor_data')
                 count = cur.fetchone()[0]
@@ -354,15 +383,257 @@ class DatabaseManager:
                         (excess,)
                     )
                     deleted += excess
+
+            # 4. 清理过期聚合数据
+            if agg_enabled:
+                agg_raw_days = self.get_setting('agg_raw_days')
+                agg_hourly_days = self.get_setting('agg_hourly_days')
+                agg_daily_days = self.get_setting('agg_daily_days')
+                if agg_hourly_days and agg_hourly_days > 0:
+                    self.conn.execute(
+                        "DELETE FROM sensor_data_aggregated WHERE level='hourly' AND timestamp < datetime('now', ?)",
+                        (f'-{agg_hourly_days} days',)
+                    )
+                if agg_daily_days and agg_daily_days > 0:
+                    self.conn.execute(
+                        "DELETE FROM sensor_data_aggregated WHERE level='daily' AND timestamp < datetime('now', ?)",
+                        (f'-{agg_daily_days} days',)
+                    )
+
             self.conn.commit()
-        return deleted
+
+        if aggregated > 0:
+            _log(f"Aggregation: {aggregated} raw records -> hourly/daily", 3)
+        return deleted + aggregated
+
+    def _do_aggregation(self):
+        """执行降采样聚合：原始数据 → 小时级 → 天级。返回被聚合合并的原始记录数"""
+        agg_raw_days = self.get_setting('agg_raw_days')
+        agg_hourly_days = self.get_setting('agg_hourly_days')
+        merged = 0
+
+        # ---- 阶段 1: 原始数据 → 小时级聚合 ----
+        if agg_raw_days and agg_raw_days > 0:
+            # 找出需要聚合的原始数据（比 raw_days 更旧、且尚未聚合的小时）
+            # 聚合窗口：整点对齐的小时
+            cutoff_raw = f'-{agg_raw_days} days'
+            try:
+                cur = self.conn.execute(
+                    "SELECT timestamp FROM sensor_data "
+                    "WHERE timestamp < datetime('now', ?) "
+                    "ORDER BY id ASC LIMIT 1",
+                    (cutoff_raw,)
+                )
+                earliest = cur.fetchone()
+                if earliest:
+                    # 找出已存在的小时级聚合时间戳，避免重复聚合
+                    agg_rows = self.conn.execute(
+                        "SELECT timestamp FROM sensor_data_aggregated "
+                        "WHERE level='hourly'"
+                    ).fetchall()
+                    agg_ts_set = set()
+                    for r in agg_rows:
+                        agg_ts_set.add(r[0])
+
+                    # 获取需要聚合的原始数据
+                    cur = self.conn.execute(
+                        "SELECT * FROM sensor_data WHERE timestamp < datetime('now', ?)",
+                        (cutoff_raw,)
+                    )
+                    rows = cur.fetchall()
+
+                    # 按小时分组聚合
+                    hour_buckets = {}
+                    for row in rows:
+                        ts_str = row['timestamp']
+                        if not ts_str:
+                            continue
+                        # 截断到小时
+                        try:
+                            hour_ts = ts_str[:13] + ':00:00'
+                        except Exception:
+                            continue
+                        if hour_ts in agg_ts_set:
+                            continue
+                        if hour_ts not in hour_buckets:
+                            hour_buckets[hour_ts] = {
+                                'humidity': [], 'temperature': [],
+                                'pm25': [], 'hcho': []
+                            }
+                        if row['humidity'] is not None:
+                            hour_buckets[hour_ts]['humidity'].append(row['humidity'])
+                        if row['temperature'] is not None:
+                            hour_buckets[hour_ts]['temperature'].append(row['temperature'])
+                        if row['pm25'] is not None:
+                            hour_buckets[hour_ts]['pm25'].append(row['pm25'])
+                        if row['hcho'] is not None:
+                            hour_buckets[hour_ts]['hcho'].append(row['hcho'])
+
+                    # 批量写入小时级聚合
+                    for hour_ts, bucket in hour_buckets.items():
+                        def _avg(lst):
+                            return sum(lst) / len(lst) if lst else None
+                        def _min(lst):
+                            return min(lst) if lst else None
+                        def _max(lst):
+                            return max(lst) if lst else None
+                        hums = bucket['humidity']
+                        temps = bucket['temperature']
+                        pm25s = bucket['pm25']
+                        hchos = bucket['hcho']
+                        count = max(len(hums), len(temps), len(pm25s), len(hchos))
+                        self.conn.execute(
+                            "INSERT OR REPLACE INTO sensor_data_aggregated "
+                            "(level, timestamp, avg_humidity, avg_temperature, avg_pm25, avg_hcho, "
+                            "min_humidity, max_humidity, min_temperature, max_temperature, "
+                            "min_pm25, max_pm25, min_hcho, max_hcho, count) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            ('hourly', hour_ts,
+                             _avg(hums), _avg(temps), _avg(pm25s), _avg(hchos),
+                             _min(hums), _max(hums), _min(temps), _max(temps),
+                             _min(pm25s), _max(pm25s), _min(hchos), _max(hchos),
+                             count)
+                        )
+                        merged += count
+            except Exception as e:
+                _log(f"Hourly aggregation error: {e}", 2)
+
+        # ---- 阶段 2: 小时级聚合 → 天级聚合 ----
+        if agg_hourly_days and agg_hourly_days > 0:
+            try:
+                cutoff_hourly = f'-{agg_hourly_days} days'
+                # 获取需要聚合的小时级数据
+                cur = self.conn.execute(
+                    "SELECT * FROM sensor_data_aggregated "
+                    "WHERE level='hourly' AND timestamp < datetime('now', ?)",
+                    (cutoff_hourly,)
+                )
+                hour_rows = cur.fetchall()
+
+                # 按天分组聚合
+                day_buckets = {}
+                for row in hour_rows:
+                    ts_str = row['timestamp']
+                    if not ts_str:
+                        continue
+                    try:
+                        day_ts = ts_str[:10] + ' 00:00:00'
+                    except Exception:
+                        continue
+                    if day_ts not in day_buckets:
+                        day_buckets[day_ts] = {
+                            'avg_humidity': [], 'avg_temperature': [],
+                            'avg_pm25': [], 'avg_hcho': [],
+                        }
+                    if row['avg_humidity'] is not None:
+                        day_buckets[day_ts]['avg_humidity'].append(row['avg_humidity'])
+                    if row['avg_temperature'] is not None:
+                        day_buckets[day_ts]['avg_temperature'].append(row['avg_temperature'])
+                    if row['avg_pm25'] is not None:
+                        day_buckets[day_ts]['avg_pm25'].append(row['avg_pm25'])
+                    if row['avg_hcho'] is not None:
+                        day_buckets[day_ts]['avg_hcho'].append(row['avg_hcho'])
+
+                # 批量写入天级聚合
+                for day_ts, bucket in day_buckets.items():
+                    def _avg2(lst):
+                        return sum(lst) / len(lst) if lst else None
+                    avg_h = _avg2(bucket['avg_humidity'])
+                    avg_t = _avg2(bucket['avg_temperature'])
+                    avg_p = _avg2(bucket['avg_pm25'])
+                    avg_c = _avg2(bucket['avg_hcho'])
+                    # 天级的 min/max 从小时级聚合的 min/max 再聚合
+                    self.conn.execute(
+                        "INSERT OR REPLACE INTO sensor_data_aggregated "
+                        "(level, timestamp, avg_humidity, avg_temperature, avg_pm25, avg_hcho, "
+                        "min_humidity, max_humidity, min_temperature, max_temperature, "
+                        "min_pm25, max_pm25, min_hcho, max_hcho, count) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        ('daily', day_ts,
+                         avg_h, avg_t, avg_p, avg_c,
+                         None, None, None, None,
+                         None, None, None, None,
+                         len(bucket['avg_humidity']))
+                    )
+
+                # 删除已聚合为天级的小时级数据
+                if hour_rows:
+                    day_keys = list(day_buckets.keys())
+                    for day_key in day_keys:
+                        self.conn.execute(
+                            "DELETE FROM sensor_data_aggregated "
+                            "WHERE level='hourly' AND timestamp LIKE ?",
+                            (day_key[:10] + '%',)
+                        )
+            except Exception as e:
+                _log(f"Daily aggregation error: {e}", 2)
+
+        return merged
+
+    def get_aggregated_history(self, hours=24):
+        """获取历史数据：近期用原始数据，远期用聚合数据"""
+        agg_raw_days = self.get_setting('agg_raw_days')
+        records = []
+
+        with self.lock:
+            if agg_raw_days and agg_raw_days > 0:
+                # 近期（≤ raw_days）返回原始数据
+                cutoff_ts = f'-{min(hours, agg_raw_days * 24)} hours'
+                if hours <= agg_raw_days * 24:
+                    cur = self.conn.execute(
+                        'SELECT * FROM sensor_data WHERE timestamp >= datetime("now", ?) ORDER BY id ASC',
+                        (cutoff_ts,)
+                    )
+                    records = [dict(r) for r in cur.fetchall()]
+                else:
+                    # 远期部分使用小时级聚合
+                    raw_hours = agg_raw_days * 24
+                    raw_cutoff = f'-{raw_hours} hours'
+                    cur = self.conn.execute(
+                        'SELECT * FROM sensor_data WHERE timestamp >= datetime("now", ?) ORDER BY id ASC',
+                        (raw_cutoff,)
+                    )
+                    records = [dict(r) for r in cur.fetchall()]
+
+                    # 远期：使用小时级聚合
+                    hourly_start = f'-{hours} hours'
+                    hourly_end = f'-{raw_hours} hours'
+                    cur = self.conn.execute(
+                        "SELECT timestamp, avg_humidity, avg_temperature, avg_pm25, avg_hcho "
+                        "FROM sensor_data_aggregated "
+                        "WHERE level='hourly' AND timestamp >= datetime('now', ?) AND timestamp < datetime('now', ?) "
+                        "ORDER BY timestamp ASC",
+                        (hourly_start, hourly_end)
+                    )
+                    for row in cur.fetchall():
+                        records.append({
+                            'id': 0,
+                            'timestamp': row['timestamp'],
+                            'humidity': row['avg_humidity'],
+                            'temperature': row['avg_temperature'],
+                            'pm25': row['avg_pm25'],
+                            'hcho': row['avg_hcho'],
+                            'client_ip': 'agg_hourly'
+                        })
+
+                    # 按时间排序
+                    records.sort(key=lambda r: str(r.get('timestamp', '')))
+            else:
+                cur = self.conn.execute(
+                    'SELECT * FROM sensor_data WHERE timestamp >= datetime("now", ?) ORDER BY id ASC',
+                    (f'-{hours} hours',)
+                )
+                records = [dict(r) for r in cur.fetchall()]
+
+        return records
 
     def clear_all_data(self):
-        """清空全部传感器数据，返回被删除的条数"""
+        """清空全部传感器数据（含聚合），返回被删除的条数"""
         with self.lock:
-            cur = self.conn.execute('DELETE FROM sensor_data')
+            cur1 = self.conn.execute('DELETE FROM sensor_data')
+            cur2 = self.conn.execute('DELETE FROM sensor_data_aggregated')
             self.conn.commit()
-            return cur.rowcount
+            return cur1.rowcount + cur2.rowcount
 
     # ---------- 后台清理线程 ----------
     def _start_cleanup_thread(self):
@@ -445,7 +716,8 @@ _SETTING_KEYS = [
     'max_records', 'retention_days', 'auth_enabled',
     'auth_user', 'auth_pass', 'log_level', 'log_file',
     'm1_brightness', 'm1_timer_enabled', 'm1_timer_day_brightness',
-    'm1_timer_night_brightness', 'm1_timer_day_start', 'm1_timer_night_start'
+    'm1_timer_night_brightness', 'm1_timer_day_start', 'm1_timer_night_start',
+    'agg_enabled', 'agg_raw_days', 'agg_hourly_days', 'agg_daily_days'
 ]
 
 
@@ -530,7 +802,13 @@ class WebRequestHandler(BaseHTTPRequestHandler):
                     hours = int(hours_str)
                 except ValueError:
                     hours = 24
-                records = db_manager.get_history(hours)
+                agg_enabled = db_manager.get_setting('agg_enabled')
+                agg_raw_days = db_manager.get_setting('agg_raw_days')
+                # 超过 raw_days 的范围使用聚合数据
+                if agg_enabled and agg_raw_days and hours > agg_raw_days * 24:
+                    records = db_manager.get_aggregated_history(hours)
+                else:
+                    records = db_manager.get_history(hours)
                 for r in records:
                     r['timestamp'] = str(r.get('timestamp', ''))
                 self._send_json(records)
