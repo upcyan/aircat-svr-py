@@ -343,6 +343,83 @@ class DatabaseManager:
             )
             return [dict(r) for r in cur.fetchall()]
 
+    def get_history_by_range(self, start, end):
+        """获取指定时间范围内的历史记录（自动选择原始或聚合数据）"""
+        with self.lock:
+            records = []
+            agg_enabled = self.get_setting('agg_enabled')
+            agg_raw_days = self.get_setting('agg_raw_days')
+
+            # 计算时间差（小时）
+            try:
+                from datetime import datetime
+                dt_start = datetime.strptime(start, '%Y-%m-%d %H:%M:%S')
+                dt_end = datetime.strptime(end, '%Y-%m-%d %H:%M:%S')
+                total_hours = (dt_end - dt_start).total_seconds() / 3600
+            except Exception:
+                total_hours = 0
+
+            if agg_enabled and agg_raw_days and total_hours > agg_raw_days * 24:
+                # 长时间范围：混合原始+聚合
+                raw_cutoff = f'-{agg_raw_days * 24} hours'
+                # 近期原始数据
+                cur = self.conn.execute(
+                    'SELECT * FROM sensor_data WHERE timestamp >= ? AND timestamp <= ? ORDER BY id ASC',
+                    (start, end)
+                )
+                records = [dict(r) for r in cur.fetchall()]
+
+                # 远期聚合数据
+                cur = self.conn.execute(
+                    "SELECT timestamp, avg_humidity, avg_temperature, avg_pm25, avg_hcho "
+                    "FROM sensor_data_aggregated "
+                    "WHERE level='hourly' AND timestamp >= ? AND timestamp <= ? "
+                    "ORDER BY timestamp ASC",
+                    (start, end)
+                )
+                for row in cur.fetchall():
+                    records.append({
+                        'id': 0,
+                        'timestamp': row['timestamp'],
+                        'humidity': row['avg_humidity'],
+                        'temperature': row['avg_temperature'],
+                        'pm25': row['avg_pm25'],
+                        'hcho': row['avg_hcho'],
+                        'client_ip': 'agg_hourly'
+                    })
+
+                # 天级聚合（如果范围超过小时级保留期）
+                agg_hourly_days = self.get_setting('agg_hourly_days')
+                if agg_hourly_days and total_hours > agg_hourly_days * 24:
+                    cur = self.conn.execute(
+                        "SELECT timestamp, avg_humidity, avg_temperature, avg_pm25, avg_hcho "
+                        "FROM sensor_data_aggregated "
+                        "WHERE level='daily' AND timestamp >= ? AND timestamp <= ? "
+                        "ORDER BY timestamp ASC",
+                        (start, end)
+                    )
+                    for row in cur.fetchall():
+                        records.append({
+                            'id': 0,
+                            'timestamp': row['timestamp'],
+                            'humidity': row['avg_humidity'],
+                            'temperature': row['avg_temperature'],
+                            'pm25': row['avg_pm25'],
+                            'hcho': row['avg_hcho'],
+                            'client_ip': 'agg_daily'
+                        })
+
+                records.sort(key=lambda r: str(r.get('timestamp', '')))
+            else:
+                # 短时间范围：直接查原始数据
+                cur = self.conn.execute(
+                    'SELECT * FROM sensor_data WHERE timestamp >= ? AND timestamp <= ? ORDER BY id ASC',
+                    (start, end)
+                )
+                records = [dict(r) for r in cur.fetchall()]
+
+            return records
+
     def get_record_count(self):
         """获取当前数据记录总数"""
         with self.lock:
@@ -797,18 +874,23 @@ class WebRequestHandler(BaseHTTPRequestHandler):
                 self._send_json({'error': 'database not initialized'}, 503)
         elif path == '/api/history':
             if db_manager:
-                hours_str = query.get('hours', ['24'])[0]
-                try:
-                    hours = int(hours_str)
-                except ValueError:
-                    hours = 24
-                agg_enabled = db_manager.get_setting('agg_enabled')
-                agg_raw_days = db_manager.get_setting('agg_raw_days')
-                # 超过 raw_days 的范围使用聚合数据
-                if agg_enabled and agg_raw_days and hours > agg_raw_days * 24:
-                    records = db_manager.get_aggregated_history(hours)
+                start_param = query.get('start', [None])[0]
+                end_param = query.get('end', [None])[0]
+                if start_param and end_param:
+                    # 自定义时间范围
+                    records = db_manager.get_history_by_range(start_param, end_param)
                 else:
-                    records = db_manager.get_history(hours)
+                    hours_str = query.get('hours', ['24'])[0]
+                    try:
+                        hours = int(hours_str)
+                    except ValueError:
+                        hours = 24
+                    agg_enabled = db_manager.get_setting('agg_enabled')
+                    agg_raw_days = db_manager.get_setting('agg_raw_days')
+                    if agg_enabled and agg_raw_days and hours > agg_raw_days * 24:
+                        records = db_manager.get_aggregated_history(hours)
+                    else:
+                        records = db_manager.get_history(hours)
                 for r in records:
                     r['timestamp'] = str(r.get('timestamp', ''))
                 self._send_json(records)

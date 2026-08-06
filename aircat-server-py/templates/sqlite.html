@@ -240,6 +240,49 @@
             box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
         }
 
+        .custom-range-btn {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            font-size: 12px;
+            padding: 6px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .custom-range-btn:hover {
+            color: var(--accent);
+            border-color: var(--accent);
+        }
+        .custom-range-btn.active {
+            background: var(--accent);
+            color: #0d1117;
+            border-color: var(--accent);
+        }
+
+        .custom-range-panel {
+            display: none;
+            margin-top: 12px;
+            padding: 12px;
+            background: var(--bg);
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }
+        .custom-range-panel.show {
+            display: block;
+        }
+        .custom-range-fields {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        .custom-range-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+            justify-content: flex-end;
+        }
+
         .chart-header {
             display: flex;
             align-items: center;
@@ -993,7 +1036,7 @@
             </div>
         </div>
 
-        <div class="chart-section">
+            <div class="chart-section">
             <div class="chart-header">
                 <h2>历史数据趋势</h2>
                 <div class="range-selector">
@@ -1001,6 +1044,23 @@
                     <button data-hours="6">6h</button>
                     <button data-hours="24" class="active">24h</button>
                     <button data-hours="168">7d</button>
+                    <button class="custom-range-btn" id="custom-range-btn">自定义</button>
+                </div>
+            </div>
+            <div class="custom-range-panel" id="custom-range-panel">
+                <div class="custom-range-fields">
+                    <div class="field">
+                        <label for="range-start">开始时间</label>
+                        <input type="datetime-local" id="range-start" step="1">
+                    </div>
+                    <div class="field">
+                        <label for="range-end">结束时间</label>
+                        <input type="datetime-local" id="range-end" step="1">
+                    </div>
+                </div>
+                <div class="custom-range-actions">
+                    <button class="btn btn-primary" id="range-apply">应用</button>
+                    <button class="btn" id="range-cancel">取消</button>
                 </div>
             </div>
             <div id="chart"></div>
@@ -1602,8 +1662,18 @@
             }
 
             // 获取历史数据并更新图表
-            function fetchHistory(hours) {
-                var url = "/api/history?hours=" + encodeURIComponent(hours);
+            // 时间范围选择
+            var isCustomRange = false;
+            var customStart = null;
+            var customEnd = null;
+
+            function fetchHistory(hours, start, end) {
+                var url;
+                if (start && end) {
+                    url = "/api/history?start=" + encodeURIComponent(start) + "&end=" + encodeURIComponent(end);
+                } else {
+                    url = "/api/history?hours=" + encodeURIComponent(hours);
+                }
                 apiFetch(url, { cache: "no-store" })
                     .then(function (arr) {
                         if (!arr || !arr.length) {
@@ -1632,6 +1702,75 @@
                             console.error("fetchHistory error:", err);
                         }
                     });
+            }
+
+            function bindRangeButtons() {
+                var btns = document.querySelectorAll(".range-selector button[data-hours]");
+                var customBtn = document.getElementById("custom-range-btn");
+                var customPanel = document.getElementById("custom-range-panel");
+                var rangeStart = document.getElementById("range-start");
+                var rangeEnd = document.getElementById("range-end");
+                var rangeApply = document.getElementById("range-apply");
+                var rangeCancel = document.getElementById("range-cancel");
+
+                btns.forEach(function (btn) {
+                    btn.addEventListener("click", function () {
+                        btns.forEach(function (b) { b.classList.remove("active"); });
+                        btn.classList.add("active");
+                        customBtn.classList.remove("active");
+                        customPanel.classList.remove("show");
+                        isCustomRange = false;
+                        currentHours = parseInt(btn.getAttribute("data-hours"), 10);
+                        fetchHistory(currentHours);
+                    });
+                });
+
+                customBtn.addEventListener("click", function () {
+                    customBtn.classList.toggle("active");
+                    customPanel.classList.toggle("show");
+                    if (customPanel.classList.contains("show")) {
+                        btns.forEach(function (b) { b.classList.remove("active"); });
+                        // 默认填充：最近 24 小时
+                        var now = new Date();
+                        var ago = new Date(now.getTime() - 24 * 3600 * 1000);
+                        var pad = function (n) { return n < 10 ? "0" + n : n; };
+                        var fmt = function (d) {
+                            return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+                                "T" + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+                        };
+                        if (!rangeStart.value) { rangeStart.value = fmt(ago); }
+                        if (!rangeEnd.value) { rangeEnd.value = fmt(now); }
+                    }
+                });
+
+                rangeApply.addEventListener("click", function () {
+                    var s = rangeStart.value;
+                    var e = rangeEnd.value;
+                    if (!s || !e) {
+                        alert("请选择开始和结束时间");
+                        return;
+                    }
+                    if (new Date(s) >= new Date(e)) {
+                        alert("开始时间必须早于结束时间");
+                        return;
+                    }
+                    isCustomRange = true;
+                    customStart = s.replace("T", " ") + (s.length === 16 ? ":00" : "");
+                    customEnd = e.replace("T", " ") + (e.length === 16 ? ":59" : "");
+                    fetchHistory(null, customStart, customEnd);
+                });
+
+                rangeCancel.addEventListener("click", function () {
+                    customPanel.classList.remove("show");
+                    customBtn.classList.remove("active");
+                    isCustomRange = false;
+                    btns.forEach(function (b) {
+                        if (parseInt(b.getAttribute("data-hours"), 10) === currentHours) {
+                            b.classList.add("active");
+                        }
+                    });
+                    fetchHistory(currentHours);
+                });
             }
 
             function initChart() {
