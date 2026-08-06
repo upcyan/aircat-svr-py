@@ -484,26 +484,29 @@ class DatabaseManager:
         return deleted + aggregated
 
     def _do_aggregation(self):
-        """执行降采样聚合：原始数据 → 小时级 → 天级。返回被聚合合并的原始记录数"""
+        """执行降采样聚合：原始数据 → 小时级 → 天级。返回被聚合合并的原始记录数
+        注意：每次最多处理 AGG_BATCH_SIZE 条，避免长时间持锁阻塞 Web API
+        """
         agg_raw_days = self.get_setting('agg_raw_days')
         agg_hourly_days = self.get_setting('agg_hourly_days')
         merged = 0
+        AGG_BATCH_SIZE = 500  # 每次最多聚合 500 条，避免阻塞
 
         # ---- 阶段 1: 原始数据 → 小时级聚合 ----
         if agg_raw_days and agg_raw_days > 0:
-            # 找出需要聚合的原始数据（比 raw_days 更旧、且尚未聚合的小时）
-            # 聚合窗口：整点对齐的小时
             cutoff_raw = f'-{agg_raw_days} days'
             try:
+                # 只取一批数据，避免长时间持锁
                 cur = self.conn.execute(
-                    "SELECT timestamp FROM sensor_data "
+                    "SELECT * FROM sensor_data "
                     "WHERE timestamp < datetime('now', ?) "
-                    "ORDER BY id ASC LIMIT 1",
-                    (cutoff_raw,)
+                    "ORDER BY id ASC LIMIT ?",
+                    (cutoff_raw, AGG_BATCH_SIZE)
                 )
-                earliest = cur.fetchone()
-                if earliest:
-                    # 找出已存在的小时级聚合时间戳，避免重复聚合
+                rows = cur.fetchall()
+
+                if rows:
+                    # 找出已存在的小时级聚合时间戳
                     agg_rows = self.conn.execute(
                         "SELECT timestamp FROM sensor_data_aggregated "
                         "WHERE level='hourly'"
@@ -512,20 +515,12 @@ class DatabaseManager:
                     for r in agg_rows:
                         agg_ts_set.add(r[0])
 
-                    # 获取需要聚合的原始数据
-                    cur = self.conn.execute(
-                        "SELECT * FROM sensor_data WHERE timestamp < datetime('now', ?)",
-                        (cutoff_raw,)
-                    )
-                    rows = cur.fetchall()
-
                     # 按小时分组聚合
                     hour_buckets = {}
                     for row in rows:
                         ts_str = row['timestamp']
                         if not ts_str:
                             continue
-                        # 截断到小时
                         try:
                             hour_ts = ts_str[:13] + ':00:00'
                         except Exception:
@@ -572,18 +567,27 @@ class DatabaseManager:
                              count)
                         )
                         merged += count
+
+                    # 删除已聚合的原始数据
+                    if rows:
+                        ids_to_delete = [row['id'] for row in rows]
+                        placeholders = ','.join('?' * len(ids_to_delete))
+                        self.conn.execute(
+                            f"DELETE FROM sensor_data WHERE id IN ({placeholders})",
+                            ids_to_delete
+                        )
             except Exception as e:
                 _log(f"Hourly aggregation error: {e}", 2)
 
-        # ---- 阶段 2: 小时级聚合 → 天级聚合 ----
+        # ---- 阶段 2: 小时级聚合 → 天级聚合（同样批量处理）----
         if agg_hourly_days and agg_hourly_days > 0:
             try:
                 cutoff_hourly = f'-{agg_hourly_days} days'
-                # 获取需要聚合的小时级数据
                 cur = self.conn.execute(
                     "SELECT * FROM sensor_data_aggregated "
-                    "WHERE level='hourly' AND timestamp < datetime('now', ?)",
-                    (cutoff_hourly,)
+                    "WHERE level='hourly' AND timestamp < datetime('now', ?) "
+                    "ORDER BY id ASC LIMIT ?",
+                    (cutoff_hourly, AGG_BATCH_SIZE)
                 )
                 hour_rows = cur.fetchall()
 
@@ -619,7 +623,6 @@ class DatabaseManager:
                     avg_t = _avg2(bucket['avg_temperature'])
                     avg_p = _avg2(bucket['avg_pm25'])
                     avg_c = _avg2(bucket['avg_hcho'])
-                    # 天级的 min/max 从小时级聚合的 min/max 再聚合
                     self.conn.execute(
                         "INSERT OR REPLACE INTO sensor_data_aggregated "
                         "(level, timestamp, avg_humidity, avg_temperature, avg_pm25, avg_hcho, "
@@ -635,13 +638,12 @@ class DatabaseManager:
 
                 # 删除已聚合为天级的小时级数据
                 if hour_rows:
-                    day_keys = list(day_buckets.keys())
-                    for day_key in day_keys:
-                        self.conn.execute(
-                            "DELETE FROM sensor_data_aggregated "
-                            "WHERE level='hourly' AND timestamp LIKE ?",
-                            (day_key[:10] + '%',)
-                        )
+                    ids_to_delete = [row['id'] for row in hour_rows]
+                    placeholders = ','.join('?' * len(ids_to_delete))
+                    self.conn.execute(
+                        f"DELETE FROM sensor_data_aggregated WHERE level='hourly' AND id IN ({placeholders})",
+                        ids_to_delete
+                    )
             except Exception as e:
                 _log(f"Daily aggregation error: {e}", 2)
 

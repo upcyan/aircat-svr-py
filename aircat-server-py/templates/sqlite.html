@@ -1986,19 +1986,7 @@
                 });
             }
 
-            // 时间范围选择
-            function bindRangeButtons() {
-                var btns = document.querySelectorAll(".range-selector button");
-                btns.forEach(function (btn) {
-                    btn.addEventListener("click", function () {
-                        btns.forEach(function (b) { b.classList.remove("active"); });
-                        btn.classList.add("active");
-                        currentHours = parseInt(btn.getAttribute("data-hours"), 10);
-                        fetchHistory(currentHours);
-                    });
-                });
-            }
-
+            // 时间范围选择（已移至上方，此处保留 startTimers/init）
             function startTimers() {
                 if (latestTimer) { clearInterval(latestTimer); }
                 if (chartTimer) { clearInterval(chartTimer); }
