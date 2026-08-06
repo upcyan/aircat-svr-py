@@ -210,9 +210,9 @@
         .card.temperature .card-icon { background: rgba(255, 112, 67, 0.15); }
         .card.temperature .card-icon svg { fill: var(--temperature); }
         .card.pm25 .card-icon { background: rgba(171, 71, 188, 0.15); }
-        .card.pm25 .card-icon svg { fill: var(--pm25); }
+        .card.pm25 .card-icon svg { fill: var(--pm25); color: var(--pm25); stroke: var(--pm25); }
         .card.hcho .card-icon { background: rgba(0, 230, 118, 0.15); }
-        .card.hcho .card-icon svg { fill: var(--hcho); }
+        .card.hcho .card-icon svg { fill: var(--hcho); color: var(--hcho); stroke: var(--hcho); }
 
         .card-value {
             display: flex;
@@ -953,7 +953,7 @@
                 <div class="card-top">
                     <span class="card-name">PM2.5</span>
                     <div class="card-icon">
-                        <svg viewBox="0 0 24 24"><path d="M6 15a4 4 0 0 1-1-7.87 5 5 0 0 1 9.78-1.13A4.5 4.5 0 0 1 18 15zm0-2h12a2.5 2.5 0 0 0 0-5h-1.34l-.3-1.2A3 3 0 0 0 10.2 6.4l-.5 1.1-1.18-.06A2 2 0 0 0 6 13zm1 4h2v3H7zm4 0h2v5h-2zm4 0h2v3h-2z"/></svg>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10a3 3 0 1 0-2.5-3"/><path d="M3 12h13a3 3 0 1 1-2.5 3"/><path d="M3 16h7a2.5 2.5 0 1 0-2 2.5"/><circle cx="18" cy="6.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="20.5" cy="10.5" r="0.9" fill="currentColor" stroke="none"/><circle cx="19" cy="14.5" r="1.1" fill="currentColor" stroke="none"/></svg>
                     </div>
                 </div>
                 <div class="card-value">
@@ -966,7 +966,7 @@
                 <div class="card-top">
                     <span class="card-name">甲醛</span>
                     <div class="card-icon">
-                        <svg viewBox="0 0 24 24"><path d="M9 2a1 1 0 0 0-1 1v2H6a3 3 0 0 0-3 3v10a3 3 0 0 0 3 3h12a3 3 0 0 0 3-3V8a3 3 0 0 0-3-3h-2V3a1 1 0 0 0-1-1H9zm0 2h6v2H9V4zM6 7h12a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1zm3 4a1 1 0 0 0-1 1v3a1 1 0 0 0 2 0v-3a1 1 0 0 0-1-1zm6 0a1 1 0 0 0-1 1v3a1 1 0 0 0 2 0v-3a1 1 0 0 0-1-1z"/></svg>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="5.8" y1="13" x2="9.2" y2="13"/><line x1="14.8" y1="13" x2="18.2" y2="13"/><line x1="12" y1="7.2" x2="12" y2="10.8"/><circle cx="12" cy="13" r="2.8" fill="currentColor" stroke="none"/><circle cx="4" cy="13" r="1.8" fill="currentColor" stroke="none"/><circle cx="20" cy="13" r="1.8" fill="currentColor" stroke="none"/><circle cx="12" cy="5" r="2.2" fill="currentColor" stroke="none"/></svg>
                     </div>
                 </div>
                 <div class="card-value">
