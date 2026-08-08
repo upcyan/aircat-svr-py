@@ -27,6 +27,28 @@ WEB_PORT = int(os.environ.get('WEB_PORT', '8080'))
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_FILE = os.path.join(_BASE_DIR, 'aircat-server-py', 'templates', 'sqlite.html')
 ECHARTS_FILE = os.path.join(_BASE_DIR, 'static', 'echarts.min.js')
+ECHARTS_CDN_URL = 'https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js'
+
+# ---------- 读取容器版本号 ----------
+def _read_version():
+    """读取版本号：优先 VERSION 环境变量 → 同目录 VERSION 文件 → 'dev'"""
+    env_v = os.environ.get('APP_VERSION', '').strip()
+    if env_v:
+        return env_v
+    for p in [
+        os.path.join(_BASE_DIR, 'VERSION'),
+        os.path.join(os.path.dirname(_BASE_DIR), 'VERSION'),
+    ]:
+        try:
+            with open(p, 'r', encoding='utf-8') as f:
+                v = f.read().strip()
+            if v:
+                return v
+        except Exception:
+            continue
+    return 'dev'
+
+APP_VERSION = _read_version()
 
 # ========== 日志配置（通过环境变量控制） ==========
 # LOG_LEVEL: DEBUG/INFO/WARNING/ERROR, 默认 DEBUG（控制台输出含DEBUG）
@@ -1257,6 +1279,61 @@ if __name__ == '__main__':
         # 其它参数则继续走正常启动流程
 
     # ---------- 正常启动 ----------
+    # 打印版本号（确保 docker logs 始终可见）
+    print(f"===========================================", flush=True)
+    print(f"  aircat-server-sqlite  v{APP_VERSION}", flush=True)
+    print(f"===========================================", flush=True)
+    _log(f"App version: {APP_VERSION}", 0)
+
+    # echarts 自动更新：优先 CDN，版本更新时覆盖本地
+    def check_update_echarts():
+        """尝试从 CDN 下载最新 echarts，若本地不存在或远端更新（hash 不同）则覆盖本地
+        返回：是否更新成功（即本地文件可用）
+        """
+        os.makedirs(os.path.dirname(ECHARTS_FILE), exist_ok=True)
+        local_ok = os.path.isfile(ECHARTS_FILE) and os.path.getsize(ECHARTS_FILE) > 1024
+
+        try:
+            import hashlib
+            import urllib.request
+            import ssl
+            # 5 秒超时，避免启动卡住
+            req = urllib.request.Request(ECHARTS_CDN_URL)
+            ctx = ssl.create_default_context()
+            with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
+                remote_data = resp.read()
+
+            if not remote_data or len(remote_data) < 1024:
+                raise ValueError("CDN returned too small data")
+
+            remote_hash = hashlib.sha256(remote_data).hexdigest()
+
+            # 本地存在则比较 hash，hash 不同视为远端更新
+            if local_ok:
+                with open(ECHARTS_FILE, 'rb') as f:
+                    local_hash = hashlib.sha256(f.read()).hexdigest()
+                if local_hash == remote_hash:
+                    print(f"[echarts] CDN 版本与本地一致，跳过更新", flush=True)
+                    return True
+            # 写入本地（首次 / 更新）
+            tmp = ECHARTS_FILE + '.tmp'
+            with open(tmp, 'wb') as f:
+                f.write(remote_data)
+            os.replace(tmp, ECHARTS_FILE)
+            _log(f"echarts updated from CDN ({len(remote_data)} bytes)", 0)
+            print(f"[echarts] 已从 CDN 同步最新版本 ({len(remote_data)} bytes)", flush=True)
+            return True
+        except Exception as e:
+            if local_ok:
+                _log(f"echarts CDN check failed ({e}), using local copy", 1)
+                print(f"[echarts] CDN 访问失败，使用本地缓存版本", flush=True)
+                return True
+            _log(f"echarts CDN check failed AND no local copy: {e}", 2)
+            print(f"[echarts] CDN 访问失败且无本地缓存：{e}", flush=True)
+            return False
+
+    check_update_echarts()
+
     # 初始化数据库
     db_manager = DatabaseManager(DB_PATH)
 
