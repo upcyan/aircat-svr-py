@@ -195,7 +195,7 @@ class DatabaseManager:
         db_dir = os.path.dirname(db_path)
         if db_dir and not os.path.exists(db_dir):
             os.makedirs(db_dir, exist_ok=True)
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()  # 可重入锁，允许 cleanup_data 内部调用 get_setting
         # check_same_thread=False 允许跨线程访问
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
