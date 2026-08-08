@@ -807,6 +807,18 @@ class WebRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         _log(f"HTTP {self.client_address[0]} - {format % args}", 3)
 
+    def handle(self):
+        """覆盖父类 handle，静默处理客户端提前断开导致的连接异常
+        避免浏览器预连接/健康检查等场景打印大段 traceback 污染日志
+        """
+        try:
+            BaseHTTPRequestHandler.handle(self)
+        except (ConnectionResetError, ConnectionAbortedError,
+                BrokenPipeError, TimeoutError):
+            pass  # 客户端提前断开，属正常情况，忽略
+        except Exception as e:
+            _log(f"HTTP handle error from {self.client_address[0]}: {e}", 2)
+
     def _send_json(self, data, status=200):
         body = json.dumps(data, ensure_ascii=False).encode('utf-8')
         self.send_response(status)
