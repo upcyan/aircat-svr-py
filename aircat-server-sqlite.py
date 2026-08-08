@@ -26,6 +26,7 @@ DB_PATH = os.environ.get('DB_PATH', '/data/aircat.db')
 WEB_PORT = int(os.environ.get('WEB_PORT', '8080'))
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_FILE = os.path.join(_BASE_DIR, 'aircat-server-py', 'templates', 'sqlite.html')
+ECHARTS_FILE = os.path.join(_BASE_DIR, 'static', 'echarts.min.js')
 
 # ========== 日志配置（通过环境变量控制） ==========
 # LOG_LEVEL: DEBUG/INFO/WARNING/ERROR, 默认 DEBUG（控制台输出含DEBUG）
@@ -876,6 +877,20 @@ class WebRequestHandler(BaseHTTPRequestHandler):
 
         if path == '/' or path == '/index.html':
             self._send_html(_INDEX_HTML)
+        elif path == '/echarts.min.js':
+            # 本地 echarts 静态文件（避免依赖 CDN）
+            try:
+                with open(ECHARTS_FILE, 'rb') as f:
+                    body = f.read()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/javascript; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.send_header('Cache-Control', 'public, max-age=86400')
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as e:
+                _log(f"Failed to serve echarts.min.js: {e}", 2)
+                self.send_error(404, 'Not Found')
         elif path == '/api/latest':
             if db_manager:
                 record = db_manager.get_latest()
@@ -978,10 +993,15 @@ class WebRequestHandler(BaseHTTPRequestHandler):
 
 def start_web_server(port=WEB_PORT):
     """启动 HTTP Web 服务器（在独立线程中运行）"""
-    server = ThreadingHTTPServer(('0.0.0.0', port), WebRequestHandler)
-    server.daemon_threads = True
-    _log(f"Web server started on port {port}", 0)
-    server.serve_forever()
+    try:
+        server = ThreadingHTTPServer(('0.0.0.0', port), WebRequestHandler)
+        server.daemon_threads = True
+        print(f"[Web] Web server started on port {port}", flush=True)
+        _log(f"Web server started on port {port}", 0)
+        server.serve_forever()
+    except Exception as e:
+        print(f"[Web] FAILED to start web server on port {port}: {e}", flush=True)
+        _log(f"Web server failed to start on port {port}: {e}", 2)
 
 
 # ========== Socket服务 ==========
