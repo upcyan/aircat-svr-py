@@ -1,7 +1,7 @@
 services:
-  aircat-server-sqlite:
-    image: upcyan/aircat-server-sqlite:latest
-    container_name: aircat-server-sqlite
+  aircat-server-web:
+    image: upcyan/aircat-server-web:latest
+    container_name: aircat-server-web
     ports:
       - "9000:9000"
       - "8080:8080"
@@ -11,10 +11,12 @@ services:
       - LOG_LEVEL=DEBUG
       # 是否写入日志文件: true/false, 默认 false
       - LOG_FILE=false
-      # SQLite 数据库路径, 默认 /data/aircat.db
+      # 数据库路径, 默认 /data/aircat.db（sqlite）或 /data/aircat.duckdb（duckdb）
       - DB_PATH=/data/aircat.db
       # Web 界面端口, 默认 8080
       - WEB_PORT=8080
+      # 存储引擎: sqlite / duckdb, 默认 sqlite（首次启动后可在 Web 设置里切换）
+      - DB_ENGINE=sqlite
       # 可选: 首次启动设置用户名（留空则不启用认证）
       # - AUTH_USER=admin
       # 可选: 首次启动设置密码（设置后自动启用认证）

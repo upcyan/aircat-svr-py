@@ -2,7 +2,7 @@
 
 > **Lite 版**：[upcyan/aircat-server-lite](https://hub.docker.com/r/upcyan/aircat-server-lite) — 轻量级数据采集
 >
-> **SQLite 版**：[upcyan/aircat-server-sqlite](https://hub.docker.com/r/upcyan/aircat-server-sqlite) — 数据存储 + Web 可视化界面
+> **Web 版**：[upcyan/aircat-server-web](https://hub.docker.com/r/upcyan/aircat-server-web) — 数据存储 + Web 可视化界面，支持 SQLite/DuckDB 双引擎切换
 >
 > 支持架构：`linux/amd64` · `linux/arm64`
 
@@ -52,20 +52,21 @@
 ```
 aircat-svr-py/
 ├── aircat-server-lite.py          # Lite 版主程序
-├── aircat-server-sqlite.py        # SQLite 版主程序（Socket + Web + SQLite）
+├── aircat-server-web.py           # Web 版主程序（Socket + Web + SQLite/DuckDB）
 ├── aircat-server-py/
 │   └── templates/
-│       └── sqlite.html            # SQLite 版 Web 界面（自包含，内联 CSS/JS）
+│       └── web.html               # Web 版界面（自包含，内联 CSS/JS）
 ├── docker-yaml/
 │   ├── docker-lite/
 │   │   └── docker-compose.yml     # Lite 版 Docker Compose
-│   └── docker-sqlite/
-│       └── docker-compose.yml     # SQLite 版 Docker Compose
+│   └── docker-web/
+│   │   └── docker-compose.yml     # Web 版 Docker Compose
 ├── .github/
 │   └── workflows/
 │       └── docker-build.yml       # GitHub Actions 自动构建双镜像
 ├── lite.Dockerfile                # Lite 版 Docker 镜像
-├── sqlite.Dockerfile              # SQLite 版 Docker 镜像
+├── web.Dockerfile                 # Web 版 Docker 镜像
+├── storage_backends.py            # 存储引擎抽象层（SQLite/DuckDB）
 ├── VERSION                        # 版本号
 └── README.md                      # 项目说明文档
 ```
@@ -123,11 +124,11 @@ services:
 
 ```bash
 # 拉取镜像
-docker pull upcyan/aircat-server-sqlite:latest
+docker pull upcyan/aircat-server-web:latest
 
 # 运行容器（默认不启用认证）
 docker run -d \
-  --name aircat-server-sqlite \
+  --name aircat-server-web \
   -p 9000:9000 \
   -p 8080:8080 \
   -e TZ=Asia/Shanghai \
@@ -137,17 +138,17 @@ docker run -d \
   -e WEB_PORT=8080 \
   -v ./data:/data \
   --restart always \
-  upcyan/aircat-server-sqlite:latest
+  upcyan/aircat-server-web:latest
 
 # 查看日志
-docker logs -f aircat-server-sqlite
+docker logs -f aircat-server-web
 ```
 
 首次启动时通过环境变量配置认证（可选）：
 
 ```bash
 docker run -d \
-  --name aircat-server-sqlite \
+  --name aircat-server-web \
   -p 9000:9000 \
   -p 8080:8080 \
   -e TZ=Asia/Shanghai \
@@ -155,26 +156,26 @@ docker run -d \
   -e AUTH_PASS=yourpassword \
   -v ./data:/data \
   --restart always \
-  upcyan/aircat-server-sqlite:latest
+  upcyan/aircat-server-web:latest
 ```
 
 #### 重置用户名和密码
 
 ```bash
 # 重置用户名
-docker exec -it aircat-server-sqlite resetname
+docker exec -it aircat-server-web resetname
 
 # 重置密码
-docker exec -it aircat-server-sqlite resetpasswd
+docker exec -it aircat-server-web resetpasswd
 ```
 
 #### Docker Compose 部署
 
 ```yaml
 services:
-  aircat-server-sqlite:
-    image: upcyan/aircat-server-sqlite:latest
-    container_name: aircat-server-sqlite
+  aircat-server-web:
+    image: upcyan/aircat-server-web:latest
+    container_name: aircat-server-web
     ports:
       - "9000:9000"
       - "8080:8080"
@@ -216,7 +217,7 @@ services:
 docker build -t aircat-server-lite -f lite.Dockerfile .
 
 # SQLite 版
-docker build -t aircat-server-sqlite -f sqlite.Dockerfile .
+docker build -t aircat-server-web -f web.Dockerfile .
 ```
 
 ### 直接运行 Python
@@ -226,7 +227,7 @@ docker build -t aircat-server-sqlite -f sqlite.Dockerfile .
 python aircat-server-lite.py
 
 # SQLite 版
-python aircat-server-sqlite.py
+python aircat-server-web.py
 ```
 
 ## 配置说明
@@ -263,16 +264,26 @@ python aircat-server-sqlite.py
 >
 > Lite 版通过环境变量配置，SQLite 版通过 Web 设置面板配置（也可通过环境变量初始化）。
 
-### SQLite 版独有环境变量
+### Web 版独有环境变量
 
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|
-| `DB_PATH` | `/data/aircat.db` | SQLite 数据库文件路径 |
+| `DB_PATH` | `/data/aircat.db` | 数据库文件路径（sqlite 用 .db，duckdb 用 .duckdb） |
+| `DB_ENGINE` | `sqlite` | 存储引擎：`sqlite` / `duckdb`，首次启动后可在 Web 设置里切换 |
 | `WEB_PORT` | `8080` | Web 界面端口 |
 | `AUTH_USER` | （空） | 首次启动设置用户名，留空则不启用认证 |
 | `AUTH_PASS` | （空） | 首次启动设置密码，设置后自动启用认证 |
 
 > `AUTH_USER` 和 `AUTH_PASS` 仅在首次启动时写入数据库，后续修改请通过 Web 设置面板或 `docker exec` 命令。
+
+#### 存储引擎切换
+
+Web 版支持 **SQLite** 和 **DuckDB** 两种存储引擎，默认 SQLite：
+
+- **SQLite**：轻量级嵌入式数据库，适合中小数据量（<50万条），零配置
+- **DuckDB**：列存分析型数据库，聚合查询更快，适合大数据量和长时间跨度分析
+
+在 Web 设置面板 → 存储引擎区域可一键切换，切换时会自动迁移全部本地数据（含设置、原始数据、聚合数据），旧库文件保留作为备份。切换后需重启容器使采集端使用新引擎。
 
 ### 配置示例
 
@@ -338,7 +349,7 @@ CREATE TABLE sensor_data (
 | 仓库 | 说明 |
 |------|------|
 | [upcyan/aircat-server-lite](https://hub.docker.com/r/upcyan/aircat-server-lite) | 斐讯悟空 M1 轻量级数据采集服务器 |
-| [upcyan/aircat-server-sqlite](https://hub.docker.com/r/upcyan/aircat-server-sqlite) | 斐讯悟空 M1 数据采集服务器（SQLite + Web 界面） |
+| [upcyan/aircat-server-web](https://hub.docker.com/r/upcyan/aircat-server-web) | 斐讯悟空 M1 数据采集服务器（SQLite/DuckDB + Web 界面） |
 
 - **支持架构**：amd64 / arm64
 - **自动构建**：每次推送到 main 分支自动构建两个镜像并递增版本号

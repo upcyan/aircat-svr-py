@@ -25,7 +25,7 @@ GET_MSG = b'\xaaO\x01%F\x119\x8f\x0b\x00\x00\x00\x00\x00\x00\x00\x00\xb0\xf8\x93
 DB_PATH = os.environ.get('DB_PATH', '/data/aircat.db')
 WEB_PORT = int(os.environ.get('WEB_PORT', '8080'))
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-TEMPLATE_FILE = os.path.join(_BASE_DIR, 'aircat-server-py', 'templates', 'sqlite.html')
+TEMPLATE_FILE = os.path.join(_BASE_DIR, 'aircat-server-py', 'templates', 'web.html')
 ECHARTS_FILE = os.path.join(_BASE_DIR, 'static', 'echarts.min.js')
 ECHARTS_CDN_URL = 'https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js'
 
@@ -163,7 +163,48 @@ def cut(num, decimals):
     return int(num * factor) / factor
 
 
-# ========== SQLite 数据库管理 ==========
+# ========== 数据库管理（支持 SQLite / DuckDB 双引擎） ==========
+# DB_ENGINE: sqlite / duckdb，默认 sqlite
+DB_ENGINE = os.environ.get('DB_ENGINE', 'sqlite').lower()
+if DB_ENGINE not in ('sqlite', 'duckdb'):
+    DB_ENGINE = 'sqlite'
+
+
+def _resolve_engine_and_path():
+    """确定当前使用的引擎和库文件路径。
+
+    通过 DB_PATH 同目录下的 engine.conf 记录当前引擎：
+    - engine.conf 不存在 → 首次启动，用 DB_ENGINE 环境变量并写入
+    - engine.conf 存在 → 读取引擎名
+    库文件路径：
+    - sqlite: DB_PATH（如 /data/aircat.db）
+    - duckdb: 同名 .duckdb（如 /data/aircat.duckdb）
+    """
+    db_dir = os.path.dirname(DB_PATH) or '.'
+    conf_path = os.path.join(db_dir, 'engine.conf')
+    base, _ = os.path.splitext(DB_PATH)
+
+    if os.path.exists(conf_path):
+        try:
+            with open(conf_path, 'r', encoding='utf-8') as f:
+                engine = f.read().strip().lower()
+            if engine in ('sqlite', 'duckdb'):
+                path = DB_PATH if engine == 'sqlite' else (base + '.duckdb')
+                return engine, path
+        except Exception:
+            pass
+
+    # 首次启动或配置异常，用环境变量
+    engine = DB_ENGINE
+    path = DB_PATH if engine == 'sqlite' else (base + '.duckdb')
+    try:
+        os.makedirs(db_dir, exist_ok=True)
+        with open(conf_path, 'w', encoding='utf-8') as f:
+            f.write(engine)
+    except Exception:
+        pass
+    return engine, path
+
 # 设置项的类型映射（用于 get_setting 返回正确的类型）
 _SETTING_TYPES = {
     'max_records': int,
@@ -183,6 +224,7 @@ _SETTING_TYPES = {
     'agg_raw_days': int,
     'agg_hourly_days': int,
     'agg_daily_days': int,
+    'db_engine': str,
 }
 
 _SETTING_DEFAULTS = {
@@ -203,561 +245,83 @@ _SETTING_DEFAULTS = {
     'agg_raw_days': 30,
     'agg_hourly_days': 90,
     'agg_daily_days': 365,
+    'db_engine': DB_ENGINE,
 }
 
 # 清理后台线程的执行间隔（秒）
 CLEANUP_INTERVAL = 300  # 5 分钟
 
 
-class DatabaseManager:
-    """SQLite 数据库管理器（线程安全）"""
+# 存储后端（SQLite / DuckDB 双引擎）
+import storage_backends
+storage_backends.configure(_SETTING_TYPES, _SETTING_DEFAULTS, CLEANUP_INTERVAL, _log)
 
-    def __init__(self, db_path=DB_PATH):
-        self.db_path = db_path
-        # 确保数据库目录存在
-        db_dir = os.path.dirname(db_path)
-        if db_dir and not os.path.exists(db_dir):
-            os.makedirs(db_dir, exist_ok=True)
-        self.lock = threading.RLock()  # 可重入锁，允许 cleanup_data 内部调用 get_setting
-        # check_same_thread=False 允许跨线程访问
-        self.conn = sqlite3.connect(db_path, check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
-        self._init_db()
-        self._init_settings_table()
-        _log(f"SQLite database initialized at {db_path}", 0)
-        # 启动后台清理线程
-        self._start_cleanup_thread()
-
-    def _init_db(self):
-        """初始化数据表"""
-        with self.lock:
-            self.conn.execute('''
-                CREATE TABLE IF NOT EXISTS sensor_data (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    humidity REAL,
-                    temperature REAL,
-                    pm25 INTEGER,
-                    hcho REAL,
-                    client_ip TEXT
-                )
-            ''')
-            self.conn.execute('''
-                CREATE TABLE IF NOT EXISTS sensor_data_aggregated (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    level TEXT NOT NULL,
-                    timestamp DATETIME NOT NULL,
-                    avg_humidity REAL, avg_temperature REAL,
-                    avg_pm25 REAL, avg_hcho REAL,
-                    min_humidity REAL, max_humidity REAL,
-                    min_temperature REAL, max_temperature REAL,
-                    min_pm25 REAL, max_pm25 REAL,
-                    min_hcho REAL, max_hcho REAL,
-                    count INTEGER DEFAULT 0,
-                    UNIQUE(level, timestamp)
-                )
-            ''')
-            self.conn.execute('CREATE INDEX IF NOT EXISTS idx_agg_level_ts ON sensor_data_aggregated(level, timestamp)')
-            self.conn.commit()
-
-    def _init_settings_table(self):
-        """初始化设置表并写入默认值（首次启动时支持环境变量覆盖）"""
-        with self.lock:
-            self.conn.execute('''
-                CREATE TABLE IF NOT EXISTS settings (
-                    key TEXT PRIMARY KEY,
-                    value TEXT
-                )
-            ''')
-
-            # 判断是否为首次启动（表中无任何设置）
-            cur = self.conn.execute('SELECT COUNT(*) FROM settings')
-            first_start = cur.fetchone()[0] == 0
-
-            defaults = dict(_SETTING_DEFAULTS)
-            if first_start:
-                # 首次启动时支持通过环境变量设置用户名/密码
-                auth_user_env = os.environ.get('AUTH_USER')
-                auth_pass_env = os.environ.get('AUTH_PASS')
-                if auth_user_env is not None:
-                    defaults['auth_user'] = auth_user_env
-                if auth_pass_env is not None:
-                    defaults['auth_pass'] = auth_pass_env
-                    defaults['auth_enabled'] = 1
-                # 首次启动时支持通过环境变量设置 M1 亮度/定时
-                m1_brightness_env = os.environ.get('M1_BRIGHTNESS')
-                if m1_brightness_env is not None:
-                    defaults['m1_brightness'] = m1_brightness_env
-                m1_timer_enabled_env = os.environ.get('M1_TIMER_ENABLED')
-                if m1_timer_enabled_env is not None:
-                    defaults['m1_timer_enabled'] = 1 if m1_timer_enabled_env.lower() in ('1', 'true', 'yes', 'on') else 0
-
-            # 仅插入尚不存在的键（保留已有配置，重启后不丢失）
-            for key, value in defaults.items():
-                cur = self.conn.execute('SELECT value FROM settings WHERE key=?', (key,))
-                if cur.fetchone() is None:
-                    self.conn.execute(
-                        'INSERT INTO settings (key, value) VALUES (?, ?)',
-                        (key, str(value))
-                    )
-            self.conn.commit()
-
-    # ---------- 设置读写 ----------
-    def get_setting(self, key):
-        """读取单个设置项，按类型映射返回正确的类型"""
-        with self.lock:
-            cur = self.conn.execute('SELECT value FROM settings WHERE key=?', (key,))
-            row = cur.fetchone()
-        if row is None:
-            return _SETTING_DEFAULTS.get(key)
-        raw = row[0]
-        type_fn = _SETTING_TYPES.get(key, str)
-        if type_fn is int:
-            try:
-                return int(raw)
-            except (ValueError, TypeError):
-                return _SETTING_DEFAULTS.get(key, 0)
-        return raw
-
-    def set_setting(self, key, value):
-        """更新单个设置项（upsert）"""
-        with self.lock:
-            self.conn.execute(
-                'INSERT INTO settings (key, value) VALUES (?, ?) '
-                'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-                (key, str(value))
-            )
-            self.conn.commit()
-
-    def get_all_settings(self):
-        """返回全部设置项的字典（按类型映射）"""
-        result = {}
-        for key in _SETTING_DEFAULTS:
-            result[key] = self.get_setting(key)
-        return result
-
-    # ---------- 数据读写 ----------
-    def insert(self, humidity, temperature, pm25, hcho, client_ip):
-        """插入一条数据记录（线程安全），插入后执行清理策略"""
-        with self.lock:
-            self.conn.execute(
-                'INSERT INTO sensor_data (humidity, temperature, pm25, hcho, client_ip) VALUES (?, ?, ?, ?, ?)',
-                (humidity, temperature, pm25, hcho, client_ip)
-            )
-            self.conn.commit()
-        # 锁已释放，执行清理（读取当前设置）
-        self.cleanup_data()
-
-    def get_latest(self):
-        """获取最新一条记录"""
-        with self.lock:
-            cur = self.conn.execute(
-                'SELECT * FROM sensor_data ORDER BY id DESC LIMIT 1'
-            )
-            row = cur.fetchone()
-            return dict(row) if row else None
-
-    def get_history(self, hours=24):
-        """获取指定小时数内的历史记录"""
-        with self.lock:
-            cur = self.conn.execute(
-                'SELECT * FROM sensor_data WHERE timestamp >= datetime("now", ?) ORDER BY id ASC',
-                (f'-{hours} hours',)
-            )
-            return [dict(r) for r in cur.fetchall()]
-
-    def get_history_by_range(self, start, end):
-        """获取指定时间范围内的历史记录（自动选择原始或聚合数据）"""
-        with self.lock:
-            records = []
-            agg_enabled = self.get_setting('agg_enabled')
-            agg_raw_days = self.get_setting('agg_raw_days')
-
-            # 计算时间差（小时）
-            try:
-                from datetime import datetime
-                dt_start = datetime.strptime(start, '%Y-%m-%d %H:%M:%S')
-                dt_end = datetime.strptime(end, '%Y-%m-%d %H:%M:%S')
-                total_hours = (dt_end - dt_start).total_seconds() / 3600
-            except Exception:
-                total_hours = 0
-
-            if agg_enabled and agg_raw_days and total_hours > agg_raw_days * 24:
-                # 长时间范围：混合原始+聚合
-                raw_cutoff = f'-{agg_raw_days * 24} hours'
-                # 近期原始数据
-                cur = self.conn.execute(
-                    'SELECT * FROM sensor_data WHERE timestamp >= ? AND timestamp <= ? ORDER BY id ASC',
-                    (start, end)
-                )
-                records = [dict(r) for r in cur.fetchall()]
-
-                # 远期聚合数据
-                cur = self.conn.execute(
-                    "SELECT timestamp, avg_humidity, avg_temperature, avg_pm25, avg_hcho "
-                    "FROM sensor_data_aggregated "
-                    "WHERE level='hourly' AND timestamp >= ? AND timestamp <= ? "
-                    "ORDER BY timestamp ASC",
-                    (start, end)
-                )
-                for row in cur.fetchall():
-                    records.append({
-                        'id': 0,
-                        'timestamp': row['timestamp'],
-                        'humidity': row['avg_humidity'],
-                        'temperature': row['avg_temperature'],
-                        'pm25': row['avg_pm25'],
-                        'hcho': row['avg_hcho'],
-                        'client_ip': 'agg_hourly'
-                    })
-
-                # 天级聚合（如果范围超过小时级保留期）
-                agg_hourly_days = self.get_setting('agg_hourly_days')
-                if agg_hourly_days and total_hours > agg_hourly_days * 24:
-                    cur = self.conn.execute(
-                        "SELECT timestamp, avg_humidity, avg_temperature, avg_pm25, avg_hcho "
-                        "FROM sensor_data_aggregated "
-                        "WHERE level='daily' AND timestamp >= ? AND timestamp <= ? "
-                        "ORDER BY timestamp ASC",
-                        (start, end)
-                    )
-                    for row in cur.fetchall():
-                        records.append({
-                            'id': 0,
-                            'timestamp': row['timestamp'],
-                            'humidity': row['avg_humidity'],
-                            'temperature': row['avg_temperature'],
-                            'pm25': row['avg_pm25'],
-                            'hcho': row['avg_hcho'],
-                            'client_ip': 'agg_daily'
-                        })
-
-                records.sort(key=lambda r: str(r.get('timestamp', '')))
-            else:
-                # 短时间范围：直接查原始数据
-                cur = self.conn.execute(
-                    'SELECT * FROM sensor_data WHERE timestamp >= ? AND timestamp <= ? ORDER BY id ASC',
-                    (start, end)
-                )
-                records = [dict(r) for r in cur.fetchall()]
-
-            return records
-
-    def get_record_count(self):
-        """获取当前数据记录总数"""
-        with self.lock:
-            cur = self.conn.execute('SELECT COUNT(*) FROM sensor_data')
-            return cur.fetchone()[0]
-
-    def cleanup_data(self):
-        """清理数据 + 自动降采样聚合。返回被删除/聚合的条数"""
-        deleted = 0
-        aggregated = 0
-        max_records = self.get_setting('max_records')
-        retention_days = self.get_setting('retention_days')
-        agg_enabled = self.get_setting('agg_enabled')
-
-        with self.lock:
-            # 1. 降采样聚合（先聚合再删除，避免数据丢失）
-            if agg_enabled:
-                aggregated = self._do_aggregation()
-
-            # 2. 删除超过保留期的原始记录
-            if retention_days and retention_days > 0:
-                cur = self.conn.execute(
-                    'DELETE FROM sensor_data WHERE timestamp < datetime("now", ?)',
-                    (f'-{retention_days} days',)
-                )
-                deleted += cur.rowcount
-
-            # 3. 删除超出上限的旧记录
-            if max_records and max_records > 0:
-                cur = self.conn.execute('SELECT COUNT(*) FROM sensor_data')
-                count = cur.fetchone()[0]
-                if count > max_records:
-                    excess = count - max_records
-                    self.conn.execute(
-                        'DELETE FROM sensor_data WHERE id IN ('
-                        'SELECT id FROM sensor_data ORDER BY id ASC LIMIT ?'
-                        ')',
-                        (excess,)
-                    )
-                    deleted += excess
-
-            # 4. 清理过期聚合数据
-            if agg_enabled:
-                agg_raw_days = self.get_setting('agg_raw_days')
-                agg_hourly_days = self.get_setting('agg_hourly_days')
-                agg_daily_days = self.get_setting('agg_daily_days')
-                if agg_hourly_days and agg_hourly_days > 0:
-                    self.conn.execute(
-                        "DELETE FROM sensor_data_aggregated WHERE level='hourly' AND timestamp < datetime('now', ?)",
-                        (f'-{agg_hourly_days} days',)
-                    )
-                if agg_daily_days and agg_daily_days > 0:
-                    self.conn.execute(
-                        "DELETE FROM sensor_data_aggregated WHERE level='daily' AND timestamp < datetime('now', ?)",
-                        (f'-{agg_daily_days} days',)
-                    )
-
-            self.conn.commit()
-
-        if aggregated > 0:
-            _log(f"Aggregation: {aggregated} raw records -> hourly/daily", 3)
-        return deleted + aggregated
-
-    def _do_aggregation(self):
-        """执行降采样聚合：原始数据 → 小时级 → 天级。返回被聚合合并的原始记录数
-        注意：每次最多处理 AGG_BATCH_SIZE 条，避免长时间持锁阻塞 Web API
-        """
-        agg_raw_days = self.get_setting('agg_raw_days')
-        agg_hourly_days = self.get_setting('agg_hourly_days')
-        merged = 0
-        AGG_BATCH_SIZE = 500  # 每次最多聚合 500 条，避免阻塞
-
-        # ---- 阶段 1: 原始数据 → 小时级聚合 ----
-        if agg_raw_days and agg_raw_days > 0:
-            cutoff_raw = f'-{agg_raw_days} days'
-            try:
-                # 只取一批数据，避免长时间持锁
-                cur = self.conn.execute(
-                    "SELECT * FROM sensor_data "
-                    "WHERE timestamp < datetime('now', ?) "
-                    "ORDER BY id ASC LIMIT ?",
-                    (cutoff_raw, AGG_BATCH_SIZE)
-                )
-                rows = cur.fetchall()
-
-                if rows:
-                    # 找出已存在的小时级聚合时间戳
-                    agg_rows = self.conn.execute(
-                        "SELECT timestamp FROM sensor_data_aggregated "
-                        "WHERE level='hourly'"
-                    ).fetchall()
-                    agg_ts_set = set()
-                    for r in agg_rows:
-                        agg_ts_set.add(r[0])
-
-                    # 按小时分组聚合
-                    hour_buckets = {}
-                    for row in rows:
-                        ts_str = row['timestamp']
-                        if not ts_str:
-                            continue
-                        try:
-                            hour_ts = ts_str[:13] + ':00:00'
-                        except Exception:
-                            continue
-                        if hour_ts in agg_ts_set:
-                            continue
-                        if hour_ts not in hour_buckets:
-                            hour_buckets[hour_ts] = {
-                                'humidity': [], 'temperature': [],
-                                'pm25': [], 'hcho': []
-                            }
-                        if row['humidity'] is not None:
-                            hour_buckets[hour_ts]['humidity'].append(row['humidity'])
-                        if row['temperature'] is not None:
-                            hour_buckets[hour_ts]['temperature'].append(row['temperature'])
-                        if row['pm25'] is not None:
-                            hour_buckets[hour_ts]['pm25'].append(row['pm25'])
-                        if row['hcho'] is not None:
-                            hour_buckets[hour_ts]['hcho'].append(row['hcho'])
-
-                    # 批量写入小时级聚合
-                    for hour_ts, bucket in hour_buckets.items():
-                        def _avg(lst):
-                            return sum(lst) / len(lst) if lst else None
-                        def _min(lst):
-                            return min(lst) if lst else None
-                        def _max(lst):
-                            return max(lst) if lst else None
-                        hums = bucket['humidity']
-                        temps = bucket['temperature']
-                        pm25s = bucket['pm25']
-                        hchos = bucket['hcho']
-                        count = max(len(hums), len(temps), len(pm25s), len(hchos))
-                        self.conn.execute(
-                            "INSERT OR REPLACE INTO sensor_data_aggregated "
-                            "(level, timestamp, avg_humidity, avg_temperature, avg_pm25, avg_hcho, "
-                            "min_humidity, max_humidity, min_temperature, max_temperature, "
-                            "min_pm25, max_pm25, min_hcho, max_hcho, count) "
-                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                            ('hourly', hour_ts,
-                             _avg(hums), _avg(temps), _avg(pm25s), _avg(hchos),
-                             _min(hums), _max(hums), _min(temps), _max(temps),
-                             _min(pm25s), _max(pm25s), _min(hchos), _max(hchos),
-                             count)
-                        )
-                        merged += count
-
-                    # 删除已聚合的原始数据
-                    if rows:
-                        ids_to_delete = [row['id'] for row in rows]
-                        placeholders = ','.join('?' * len(ids_to_delete))
-                        self.conn.execute(
-                            f"DELETE FROM sensor_data WHERE id IN ({placeholders})",
-                            ids_to_delete
-                        )
-            except Exception as e:
-                _log(f"Hourly aggregation error: {e}", 2)
-
-        # ---- 阶段 2: 小时级聚合 → 天级聚合（同样批量处理）----
-        if agg_hourly_days and agg_hourly_days > 0:
-            try:
-                cutoff_hourly = f'-{agg_hourly_days} days'
-                cur = self.conn.execute(
-                    "SELECT * FROM sensor_data_aggregated "
-                    "WHERE level='hourly' AND timestamp < datetime('now', ?) "
-                    "ORDER BY id ASC LIMIT ?",
-                    (cutoff_hourly, AGG_BATCH_SIZE)
-                )
-                hour_rows = cur.fetchall()
-
-                # 按天分组聚合
-                day_buckets = {}
-                for row in hour_rows:
-                    ts_str = row['timestamp']
-                    if not ts_str:
-                        continue
-                    try:
-                        day_ts = ts_str[:10] + ' 00:00:00'
-                    except Exception:
-                        continue
-                    if day_ts not in day_buckets:
-                        day_buckets[day_ts] = {
-                            'avg_humidity': [], 'avg_temperature': [],
-                            'avg_pm25': [], 'avg_hcho': [],
-                        }
-                    if row['avg_humidity'] is not None:
-                        day_buckets[day_ts]['avg_humidity'].append(row['avg_humidity'])
-                    if row['avg_temperature'] is not None:
-                        day_buckets[day_ts]['avg_temperature'].append(row['avg_temperature'])
-                    if row['avg_pm25'] is not None:
-                        day_buckets[day_ts]['avg_pm25'].append(row['avg_pm25'])
-                    if row['avg_hcho'] is not None:
-                        day_buckets[day_ts]['avg_hcho'].append(row['avg_hcho'])
-
-                # 批量写入天级聚合
-                for day_ts, bucket in day_buckets.items():
-                    def _avg2(lst):
-                        return sum(lst) / len(lst) if lst else None
-                    avg_h = _avg2(bucket['avg_humidity'])
-                    avg_t = _avg2(bucket['avg_temperature'])
-                    avg_p = _avg2(bucket['avg_pm25'])
-                    avg_c = _avg2(bucket['avg_hcho'])
-                    self.conn.execute(
-                        "INSERT OR REPLACE INTO sensor_data_aggregated "
-                        "(level, timestamp, avg_humidity, avg_temperature, avg_pm25, avg_hcho, "
-                        "min_humidity, max_humidity, min_temperature, max_temperature, "
-                        "min_pm25, max_pm25, min_hcho, max_hcho, count) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        ('daily', day_ts,
-                         avg_h, avg_t, avg_p, avg_c,
-                         None, None, None, None,
-                         None, None, None, None,
-                         len(bucket['avg_humidity']))
-                    )
-
-                # 删除已聚合为天级的小时级数据
-                if hour_rows:
-                    ids_to_delete = [row['id'] for row in hour_rows]
-                    placeholders = ','.join('?' * len(ids_to_delete))
-                    self.conn.execute(
-                        f"DELETE FROM sensor_data_aggregated WHERE level='hourly' AND id IN ({placeholders})",
-                        ids_to_delete
-                    )
-            except Exception as e:
-                _log(f"Daily aggregation error: {e}", 2)
-
-        return merged
-
-    def get_aggregated_history(self, hours=24):
-        """获取历史数据：近期用原始数据，远期用聚合数据"""
-        agg_raw_days = self.get_setting('agg_raw_days')
-        records = []
-
-        with self.lock:
-            if agg_raw_days and agg_raw_days > 0:
-                # 近期（≤ raw_days）返回原始数据
-                cutoff_ts = f'-{min(hours, agg_raw_days * 24)} hours'
-                if hours <= agg_raw_days * 24:
-                    cur = self.conn.execute(
-                        'SELECT * FROM sensor_data WHERE timestamp >= datetime("now", ?) ORDER BY id ASC',
-                        (cutoff_ts,)
-                    )
-                    records = [dict(r) for r in cur.fetchall()]
-                else:
-                    # 远期部分使用小时级聚合
-                    raw_hours = agg_raw_days * 24
-                    raw_cutoff = f'-{raw_hours} hours'
-                    cur = self.conn.execute(
-                        'SELECT * FROM sensor_data WHERE timestamp >= datetime("now", ?) ORDER BY id ASC',
-                        (raw_cutoff,)
-                    )
-                    records = [dict(r) for r in cur.fetchall()]
-
-                    # 远期：使用小时级聚合
-                    hourly_start = f'-{hours} hours'
-                    hourly_end = f'-{raw_hours} hours'
-                    cur = self.conn.execute(
-                        "SELECT timestamp, avg_humidity, avg_temperature, avg_pm25, avg_hcho "
-                        "FROM sensor_data_aggregated "
-                        "WHERE level='hourly' AND timestamp >= datetime('now', ?) AND timestamp < datetime('now', ?) "
-                        "ORDER BY timestamp ASC",
-                        (hourly_start, hourly_end)
-                    )
-                    for row in cur.fetchall():
-                        records.append({
-                            'id': 0,
-                            'timestamp': row['timestamp'],
-                            'humidity': row['avg_humidity'],
-                            'temperature': row['avg_temperature'],
-                            'pm25': row['avg_pm25'],
-                            'hcho': row['avg_hcho'],
-                            'client_ip': 'agg_hourly'
-                        })
-
-                    # 按时间排序
-                    records.sort(key=lambda r: str(r.get('timestamp', '')))
-            else:
-                cur = self.conn.execute(
-                    'SELECT * FROM sensor_data WHERE timestamp >= datetime("now", ?) ORDER BY id ASC',
-                    (f'-{hours} hours',)
-                )
-                records = [dict(r) for r in cur.fetchall()]
-
-        return records
-
-    def clear_all_data(self):
-        """清空全部传感器数据（含聚合），返回被删除的条数"""
-        with self.lock:
-            cur1 = self.conn.execute('DELETE FROM sensor_data')
-            cur2 = self.conn.execute('DELETE FROM sensor_data_aggregated')
-            self.conn.commit()
-            return cur1.rowcount + cur2.rowcount
-
-    # ---------- 后台清理线程 ----------
-    def _start_cleanup_thread(self):
-        """启动后台守护线程，定期执行清理"""
-        t = threading.Thread(target=self._cleanup_loop, daemon=True)
-        t.start()
-        _log("Background cleanup thread started (interval=300s)", 3)
-
-    def _cleanup_loop(self):
-        """后台清理循环：每 5 分钟读取当前设置并执行清理"""
-        while True:
-            try:
-                time.sleep(CLEANUP_INTERVAL)
-                deleted = self.cleanup_data()
-                if deleted > 0:
-                    _log(f"Cleanup: deleted {deleted} expired/over-limit records", 3)
-            except Exception as e:
-                _log(f"Cleanup thread error: {e}", 2)
 
 
 # 全局数据库实例（在 main 中初始化）
 db_manager = None
+
+# 迁移操作锁（避免并发迁移）
+_migrate_lock = threading.Lock()
+
+
+def do_migrate_engine(target_engine):
+    """切换存储引擎并迁移本地数据。
+
+    - target_engine: 'sqlite' 或 'duckdb'
+    - 迁移完成后切换全局 db_manager，更新 engine.conf
+    - 旧库文件保留（作为备份）
+    - 返回: (new_engine, migrated_count, old_path, new_path)
+    """
+    global db_manager
+    if not db_manager:
+        raise RuntimeError("数据库未初始化")
+
+    target_engine = target_engine.lower().strip()
+    if target_engine not in ('sqlite', 'duckdb'):
+        raise ValueError("不支持的引擎，仅支持 sqlite / duckdb")
+
+    if target_engine == db_manager.engine_name:
+        raise ValueError(f"当前已是 {target_engine} 引擎，无需切换")
+
+    if not _migrate_lock.acquire(blocking=False):
+        raise RuntimeError("已有迁移任务正在进行，请稍候")
+
+    try:
+        base, _ = os.path.splitext(DB_PATH)
+        target_path = DB_PATH if target_engine == 'sqlite' else (base + '.duckdb')
+        old_path = db_manager.db_path
+
+        _log(f"开始迁移：{db_manager.engine_name} -> {target_engine}", 0)
+        new_storage, count = storage_backends.migrate_storage(
+            db_manager, target_engine, target_path
+        )
+
+        # 关闭旧库
+        try:
+            db_manager.close()
+        except Exception:
+            pass
+
+        # 切换全局实例
+        db_manager = new_storage
+
+        # 更新 engine.conf
+        db_dir = os.path.dirname(DB_PATH) or '.'
+        conf_path = os.path.join(db_dir, 'engine.conf')
+        try:
+            with open(conf_path, 'w', encoding='utf-8') as f:
+                f.write(target_engine)
+        except Exception as e:
+            _log(f"更新 engine.conf 失败: {e}", 1)
+
+        # 更新设置里的 db_engine
+        db_manager.set_setting('db_engine', target_engine)
+        _log(f"迁移完成：{count} 条记录已迁移到 {target_engine} ({target_path})", 0)
+
+        return target_engine, count, old_path, target_path
+    finally:
+        _migrate_lock.release()
 
 
 # ========== 认证系统 ==========
@@ -952,6 +516,23 @@ class WebRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(db_manager.get_all_settings())
             else:
                 self._send_json({'error': 'database not initialized'}, 503)
+        elif path == '/api/engine':
+            # 返回当前引擎信息
+            if db_manager:
+                count = db_manager.get_record_count()
+                base, _ = os.path.splitext(DB_PATH)
+                self._send_json({
+                    'current': db_manager.engine_name,
+                    'available': ['sqlite', 'duckdb'],
+                    'record_count': count,
+                    'db_path': db_manager.db_path,
+                    'sqlite_path': DB_PATH,
+                    'duckdb_path': base + '.duckdb',
+                    'sqlite_exists': os.path.exists(DB_PATH),
+                    'duckdb_exists': os.path.exists(base + '.duckdb'),
+                })
+            else:
+                self._send_json({'error': 'database not initialized'}, 503)
         else:
             self.send_error(404, 'Not Found')
 
@@ -1008,6 +589,32 @@ class WebRequestHandler(BaseHTTPRequestHandler):
                 return
             deleted = db_manager.clear_all_data()
             self._send_json({'success': True, 'deleted': deleted})
+            return
+
+        if path == '/api/migrate':
+            # 存储引擎迁移
+            if not db_manager:
+                self._send_json({'error': 'database not initialized'}, 503)
+                return
+            data = self._read_json_body()
+            if not isinstance(data, dict):
+                self._send_json({'error': 'invalid json'}, 400)
+                return
+            target = str(data.get('target', '')).lower().strip()
+            try:
+                new_engine, count, old_path, new_path = do_migrate_engine(target)
+                self._send_json({
+                    'success': True,
+                    'engine': new_engine,
+                    'migrated': count,
+                    'old_path': old_path,
+                    'new_path': new_path
+                })
+            except ValueError as e:
+                self._send_json({'error': str(e)}, 400)
+            except Exception as e:
+                _log(f"Migration failed: {e}", 2)
+                self._send_json({'error': f'迁移失败: {e}'}, 500)
             return
 
         self.send_error(404, 'Not Found')
@@ -1253,7 +860,8 @@ if __name__ == '__main__':
     if len(sys.argv) > 1:
         cmd = sys.argv[1]
         if cmd == 'resetname':
-            db_manager = DatabaseManager(DB_PATH)
+            _e, _p = _resolve_engine_and_path()
+            db_manager = storage_backends.create_storage(_e, _p)
             try:
                 new_user = input('Enter new username: ').strip()
             except EOFError:
@@ -1265,7 +873,8 @@ if __name__ == '__main__':
                 print("Username not changed (empty input).")
             sys.exit(0)
         elif cmd == 'resetpasswd':
-            db_manager = DatabaseManager(DB_PATH)
+            _e, _p = _resolve_engine_and_path()
+            db_manager = storage_backends.create_storage(_e, _p)
             try:
                 new_pass = input('Enter new password: ').strip()
             except EOFError:
@@ -1281,7 +890,7 @@ if __name__ == '__main__':
     # ---------- 正常启动 ----------
     # 打印版本号（确保 docker logs 始终可见）
     print(f"===========================================", flush=True)
-    print(f"  aircat-server-sqlite  v{APP_VERSION}", flush=True)
+    print(f"  aircat-server-web  v{APP_VERSION}", flush=True)
     print(f"===========================================", flush=True)
     _log(f"App version: {APP_VERSION}", 0)
 
@@ -1334,8 +943,10 @@ if __name__ == '__main__':
 
     check_update_echarts()
 
-    # 初始化数据库
-    db_manager = DatabaseManager(DB_PATH)
+    # 初始化数据库（根据 engine.conf 确定引擎）
+    _cur_engine, _cur_path = _resolve_engine_and_path()
+    db_manager = storage_backends.create_storage(_cur_engine, _cur_path)
+    _log(f"Using storage engine: {_cur_engine} ({_cur_path})", 0)
 
     # 立即应用数据库中的日志设置
     apply_log_settings()

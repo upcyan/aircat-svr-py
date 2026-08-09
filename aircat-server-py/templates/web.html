@@ -1129,6 +1129,31 @@
                     <button class="btn btn-danger btn-block" id="cleanup-btn">清理全部数据</button>
                 </div>
 
+                <!-- 存储引擎 -->
+                <div class="section">
+                    <div class="section-title">存储引擎</div>
+                    <div class="field">
+                        <label>当前引擎</label>
+                        <div class="engine-info" id="engine-info">加载中...</div>
+                    </div>
+                    <div class="field-hint">
+                        <strong>SQLite</strong>：轻量级，适合中小数据量（&lt;50万条），零配置。<br>
+                        <strong>DuckDB</strong>：列存数据库，聚合查询更快，适合大数据量和长时间跨度分析。<br>
+                        切换引擎会自动迁移全部本地数据（含设置、原始数据、聚合数据），旧库文件保留作为备份。<br>
+                        <strong>注意：切换后需重启容器才能让 Socket 采集端使用新引擎。</strong>
+                    </div>
+                    <div class="field-row" id="engine-switch-row" style="display:none;">
+                        <div class="field">
+                            <label for="engine-target">切换到</label>
+                            <select id="engine-target">
+                                <option value="sqlite">SQLite</option>
+                                <option value="duckdb">DuckDB</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-primary" id="migrate-btn" style="align-self:flex-end;">迁移并切换</button>
+                    </div>
+                </div>
+
                 <!-- 数据降采样 -->
                 <div class="section">
                     <div class="section-title">数据降采样</div>
@@ -1473,6 +1498,7 @@
                 hideSettingsMsg();
                 settingsOverlay.classList.add("show");
                 loadSettings();
+                loadEngineInfo();
             }
 
             function closeSettings() {
@@ -1640,6 +1666,60 @@
                         cleanupBtn.textContent = "清理全部数据";
                     });
                 });
+            });
+
+            // ===== 存储引擎切换 =====
+            var migrateBtn = document.getElementById("migrate-btn");
+            var engineTarget = document.getElementById("engine-target");
+
+            function loadEngineInfo() {
+                apiFetch("/api/engine", { method: "GET" }).then(function (d) {
+                    if (!d) { return; }
+                    var info = document.getElementById("engine-info");
+                    var curName = d.current === "duckdb" ? "DuckDB" : "SQLite";
+                    info.innerHTML = "<strong>" + curName + "</strong>" +
+                        "（当前记录数：" + (d.record_count || 0) + "）<br>" +
+                        "<small>库文件：" + d.db_path + "</small>";
+                    // 切换下拉只显示另一个引擎
+                    var opts = engineTarget.querySelectorAll("option");
+                    opts.forEach(function (o) {
+                        o.style.display = o.value === d.current ? "none" : "";
+                    });
+                    engineTarget.value = d.current === "duckdb" ? "sqlite" : "duckdb";
+                    document.getElementById("engine-switch-row").style.display = "flex";
+                }).catch(function () {
+                    document.getElementById("engine-info").textContent = "获取引擎信息失败";
+                });
+            }
+
+            migrateBtn.addEventListener("click", function () {
+                var target = engineTarget.value;
+                var targetName = target === "duckdb" ? "DuckDB" : "SQLite";
+                showConfirm("切换存储引擎", "将把全部本地数据迁移到 " + targetName +
+                    "，迁移期间服务暂停响应，旧库文件保留作为备份。切换后需重启容器。确定继续？",
+                    function (ok) {
+                        if (!ok) { return; }
+                        migrateBtn.disabled = true;
+                        migrateBtn.textContent = "迁移中...";
+                        apiFetch("/api/migrate", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ target: target })
+                        }).then(function (d) {
+                            showSettingsMsg("已切换到 " + targetName +
+                                "，迁移 " + (d.migrated || 0) + " 条记录。请重启容器使采集端生效。", "success");
+                            loadEngineInfo();
+                        }).catch(function (err) {
+                            if (err && err.status !== 401) {
+                                var m = "迁移失败";
+                                if (err && err.body && err.body.error) { m = err.body.error; }
+                                showSettingsMsg(m, "error");
+                            }
+                        }).finally(function () {
+                            migrateBtn.disabled = false;
+                            migrateBtn.textContent = "迁移并切换";
+                        });
+                    });
             });
 
             // ===== 数据卡片 & 图表 =====

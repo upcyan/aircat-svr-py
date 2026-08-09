@@ -51,16 +51,16 @@ jobs:
             ${{ secrets.DOCKER_USERNAME }}/aircat-server-lite:latest
             ${{ secrets.DOCKER_USERNAME }}/aircat-server-lite:${{ steps.version.outputs.current_version }}
 
-      - name: Build and push sqlite image
+      - name: Build and push web image
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./sqlite.Dockerfile
+          file: ./web.Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            ${{ secrets.DOCKER_USERNAME }}/aircat-server-sqlite:latest
-            ${{ secrets.DOCKER_USERNAME }}/aircat-server-sqlite:${{ steps.version.outputs.current_version }}
+            ${{ secrets.DOCKER_USERNAME }}/aircat-server-web:latest
+            ${{ secrets.DOCKER_USERNAME }}/aircat-server-web:${{ steps.version.outputs.current_version }}
 
       - name: Increment version
         run: |
