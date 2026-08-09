@@ -191,7 +191,7 @@
         .card-top {
             display: flex;
             align-items: center;
-            justify-content: space-between;
+            gap: 10px;
         }
 
         .card-name {
@@ -208,6 +208,7 @@
             align-items: center;
             justify-content: center;
             background: var(--accent-dim);
+            flex-shrink: 0;
         }
 
         .card-icon svg {
@@ -800,7 +801,7 @@
             }
 
             #chart {
-                height: 320px;
+                height: 300px;
             }
 
             .chart-section {
@@ -912,7 +913,12 @@
                 height: 3px;
             }
             .card-top {
+                flex: 0 1 auto;
+                gap: 8px;
+            }
+            .card-value {
                 flex: 1;
+                justify-content: flex-end;
             }
             .card-value .num {
                 font-size: 28px;
@@ -941,7 +947,7 @@
                 padding: 12px;
             }
             #chart {
-                height: 260px;
+                height: 280px;
             }
             /* 设置项紧凑化 */
             .field input[type="text"],
@@ -996,10 +1002,10 @@
         <div class="cards">
             <div class="card humidity">
                 <div class="card-top">
-                    <span class="card-name">湿度</span>
                     <div class="card-icon">
                         <svg viewBox="0 0 24 24"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/></svg>
                     </div>
+                    <span class="card-name">湿度</span>
                 </div>
                 <div class="card-value">
                     <span class="num" id="val-humidity">--</span>
@@ -1009,10 +1015,10 @@
 
             <div class="card temperature">
                 <div class="card-top">
-                    <span class="card-name">温度</span>
                     <div class="card-icon">
                         <svg viewBox="0 0 24 24"><path d="M15 13V5a3 3 0 0 0-6 0v8a5 5 0 1 0 6 0zm-6-8a1 1 0 0 1 2 0v8.59l.71.7a3 3 0 1 1-4.24 0l.7-.7V5z"/></svg>
                     </div>
+                    <span class="card-name">温度</span>
                 </div>
                 <div class="card-value">
                     <span class="num" id="val-temperature">--</span>
@@ -1022,10 +1028,10 @@
 
             <div class="card pm25">
                 <div class="card-top">
-                    <span class="card-name">PM2.5</span>
                     <div class="card-icon">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10a3 3 0 1 0-2.5-3"/><path d="M3 12h13a3 3 0 1 1-2.5 3"/><path d="M3 16h7a2.5 2.5 0 1 0-2 2.5"/><circle cx="18" cy="6.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="20.5" cy="10.5" r="0.9" fill="currentColor" stroke="none"/><circle cx="19" cy="14.5" r="1.1" fill="currentColor" stroke="none"/></svg>
                     </div>
+                    <span class="card-name">PM2.5</span>
                 </div>
                 <div class="card-value">
                     <span class="num" id="val-pm25">--</span>
@@ -1035,10 +1041,10 @@
 
             <div class="card hcho">
                 <div class="card-top">
-                    <span class="card-name">甲醛</span>
                     <div class="card-icon">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="5.8" y1="13" x2="9.2" y2="13"/><line x1="14.8" y1="13" x2="18.2" y2="13"/><line x1="12" y1="7.2" x2="12" y2="10.8"/><circle cx="12" cy="13" r="2.8" fill="currentColor" stroke="none"/><circle cx="4" cy="13" r="1.8" fill="currentColor" stroke="none"/><circle cx="20" cy="13" r="1.8" fill="currentColor" stroke="none"/><circle cx="12" cy="5" r="2.2" fill="currentColor" stroke="none"/></svg>
                     </div>
+                    <span class="card-name">甲醛</span>
                 </div>
                 <div class="card-value">
                     <span class="num" id="val-hcho">--</span>
@@ -1789,16 +1795,101 @@
                     renderer: "canvas"
                 });
                 var isMobile = window.innerWidth <= 768;
+                var isSmall = window.innerWidth <= 480;
+
+                // 移动端优化配置：图例到底部、去掉Y轴名称、缩小间距
+                var legendOpt;
+                var gridOpt;
+                var yAxisOpts;
+                var chartHeight;
+
+                if (isMobile) {
+                    // 移动端：图例放底部，节省顶部空间
+                    legendOpt = {
+                        data: ["湿度", "温度", "PM2.5", "甲醛"],
+                        bottom: 48,
+                        type: "plain",
+                        textStyle: { color: "#8b949e", fontSize: 11 },
+                        inactiveColor: "#444c56",
+                        itemWidth: 10,
+                        itemHeight: 7,
+                        itemGap: 8,
+                        icon: "roundRect"
+                    };
+                    // 移动端 grid 紧凑，图例到底部后 top 可缩小
+                    gridOpt = {
+                        top: 12,
+                        left: 8,
+                        right: 48,
+                        bottom: 80,
+                        containLabel: true
+                    };
+                    // 移动端去掉Y轴名称，避免与图例/标签重叠
+                    yAxisOpts = [
+                        {
+                            type: "value",
+                            position: "left",
+                            axisLine: { show: false },
+                            axisTick: { show: false },
+                            axisLabel: { color: "#8b949e", fontSize: 10 },
+                            splitLine: { lineStyle: { color: "rgba(48, 54, 61, 0.6)" } }
+                        },
+                        {
+                            type: "value",
+                            position: "right",
+                            axisLine: { show: false },
+                            axisTick: { show: false },
+                            axisLabel: { color: "#8b949e", fontSize: 10, width: 45, overflow: "truncate" },
+                            splitLine: { show: false }
+                        }
+                    ];
+                } else {
+                    // 桌面端：图例在顶部，保留Y轴名称
+                    legendOpt = {
+                        data: ["湿度", "温度", "PM2.5", "甲醛"],
+                        top: 8,
+                        type: "plain",
+                        textStyle: { color: "#8b949e", fontSize: 12 },
+                        inactiveColor: "#444c56",
+                        itemWidth: 14,
+                        itemHeight: 10,
+                        itemGap: 18
+                    };
+                    gridOpt = {
+                        top: 50,
+                        left: 12,
+                        right: 12,
+                        bottom: 70,
+                        containLabel: true
+                    };
+                    yAxisOpts = [
+                        {
+                            type: "value",
+                            name: "湿度/温度/PM2.5",
+                            nameTextStyle: { color: "#8b949e", fontSize: 11, padding: [0, 0, 0, 30] },
+                            position: "left",
+                            axisLine: { show: false },
+                            axisTick: { show: false },
+                            axisLabel: { color: "#8b949e", fontSize: 11 },
+                            splitLine: { lineStyle: { color: "rgba(48, 54, 61, 0.6)" } }
+                        },
+                        {
+                            type: "value",
+                            name: "甲醛",
+                            nameTextStyle: { color: "#8b949e", fontSize: 11, padding: [0, 30, 0, 0] },
+                            position: "right",
+                            axisLine: { show: false },
+                            axisTick: { show: false },
+                            axisLabel: { color: "#8b949e", fontSize: 11, width: 50, overflow: "truncate" },
+                            splitLine: { show: false }
+                        }
+                    ];
+                }
+
                 var option = {
                     backgroundColor: "transparent",
                     color: ["#42a5f5", "#ff7043", "#ab47bc", "#00e676"],
-                    grid: {
-                        top: 50,
-                        left: 12,
-                        right: isMobile ? 55 : 12,
-                        bottom: isMobile ? 80 : 70,
-                        containLabel: true
-                    },
+                    grid: gridOpt,
                     tooltip: {
                         trigger: "axis",
                         confine: true,
@@ -1827,7 +1918,6 @@
                             for (var i = 0; i < params.length; i++) {
                                 var p = params[i];
                                 var val = p.value;
-                                // [timestamp, value] 数组格式时取第二个元素
                                 if (Array.isArray(val)) { val = val[1]; }
                                 if (val === null || val === undefined) {
                                     val = "--";
@@ -1839,55 +1929,25 @@
                             return html;
                         }
                     },
-                    legend: {
-                        data: ["湿度", "温度", "PM2.5", "甲醛"],
-                        top: 8,
-                        type: "plain",
-                        textStyle: { color: "#8b949e", fontSize: isMobile ? 11 : 12 },
-                        inactiveColor: "#444c56",
-                        itemWidth: isMobile ? 12 : 14,
-                        itemHeight: isMobile ? 8 : 10,
-                        itemGap: isMobile ? 10 : 18
-                    },
+                    legend: legendOpt,
                     xAxis: {
                         type: "time",
                         axisLine: { lineStyle: { color: "#30363d" } },
                         axisLabel: { color: "#8b949e", fontSize: 11, hideOverlap: true },
                         splitLine: { show: false }
                     },
-                    yAxis: [
-                        {
-                            type: "value",
-                            name: "湿度/温度/PM2.5",
-                            nameTextStyle: { color: "#8b949e", fontSize: 11, padding: [0, 0, 0, 30] },
-                            position: "left",
-                            axisLine: { show: false },
-                            axisTick: { show: false },
-                            axisLabel: { color: "#8b949e", fontSize: 11 },
-                            splitLine: { lineStyle: { color: "rgba(48, 54, 61, 0.6)" } }
-                        },
-                        {
-                            type: "value",
-                            name: "甲醛",
-                            nameTextStyle: { color: "#8b949e", fontSize: 11, padding: [0, 30, 0, 0] },
-                            position: "right",
-                            axisLine: { show: false },
-                            axisTick: { show: false },
-                            axisLabel: { color: "#8b949e", fontSize: isMobile ? 10 : 11, width: 50, overflow: "truncate" },
-                            splitLine: { show: false }
-                        }
-                    ],
+                    yAxis: yAxisOpts,
                     dataZoom: [
                         {
                             type: "slider",
-                            bottom: 12,
-                            height: isMobile ? 28 : 22,
+                            bottom: isMobile ? 4 : 12,
+                            height: isMobile ? 22 : 22,
                             backgroundColor: "#0d1117",
                             borderColor: "#30363d",
                             fillerColor: "rgba(0, 230, 118, 0.12)",
                             handleStyle: { color: "#00e676", borderColor: "#00e676" },
                             moveHandleStyle: { color: "#00e676" },
-                            textStyle: { color: "#8b949e" },
+                            textStyle: { color: "#8b949e", fontSize: 10 },
                             dataBackground: {
                                 lineStyle: { color: "#30363d" },
                                 areaStyle: { color: "#1c2230" }
