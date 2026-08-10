@@ -1897,10 +1897,11 @@
                         icon: "roundRect"
                     };
                     // 移动端 grid 紧凑，图例到底部后 top 可缩小
+                    // 左右边距对称设置：containLabel 会自动为轴标签计算额外空间
                     gridOpt = {
                         top: 12,
-                        left: 8,
-                        right: 48,
+                        left: 24,
+                        right: 24,
                         bottom: 80,
                         containLabel: true
                     };
@@ -2102,7 +2103,8 @@
                         lastMobile = nowMobile;
                         chart.setOption({
                             grid: {
-                                right: nowMobile ? 55 : 12,
+                                left: nowMobile ? 24 : 12,
+                                right: nowMobile ? 24 : 12,
                                 bottom: nowMobile ? 80 : 70
                             },
                             legend: {
