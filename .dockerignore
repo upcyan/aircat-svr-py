@@ -1,0 +1,11 @@
+.git
+.github
+docker-yaml
+*.md
+*.sh
+.DS_Store
+__pycache__
+*.pyc
+*.egg-info
+.env
+.venv

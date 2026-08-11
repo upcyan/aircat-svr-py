@@ -1,28 +1,32 @@
+# ===== 阶段1：下载 echarts（不进入最终镜像）=====
+FROM python:3.14-slim AS echarts-stage
+RUN mkdir -p /static && \
+    python -c "import urllib.request; urllib.request.urlretrieve('https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js', '/static/echarts.min.js')" && \
+    test -s /static/echarts.min.js
+
+# ===== 阶段2：最终镜像 =====
 FROM python:3.14-slim
 
-# 安装安全更新（修复 Debian 基础镜像中的已知 CVE）+ 必要依赖
+# 安全更新 + 安装依赖 + 清理（合并为单层减小体积）
 RUN apt-get update && \
     apt-get upgrade -y && \
     apt-get install -y --no-install-recommends tzdata && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    pip install --no-cache-dir --no-compile duckdb pytz && \
+    find /usr/local/lib/python3.14 -type d \( -name "test*" -o -name "__pycache__" \) -exec rm -rf {} + 2>/dev/null; \
+    rm -rf /usr/local/lib/python3.14/idlelib /usr/local/lib/python3.14/lib2to3 2>/dev/null; \
+    true
 
 WORKDIR /aircat-server
 
-# 安装依赖：duckdb（可选存储引擎）+ pytz（duckdb 时区支持）
-RUN pip install --no-cache-dir duckdb pytz
+COPY --from=echarts-stage /static ./static
 
 COPY aircat-server-web.py .
 COPY storage_backends.py .
 COPY aircat-server-py/templates/web.html ./aircat-server-py/templates/
 COPY VERSION .
-RUN echo "Building aircat-server-web v$(cat VERSION)"
 
-# 下载 echarts 到本地（构建时种子文件，启动时若有新版本会自动覆盖）
-RUN mkdir -p static && \
-    python -c "import urllib.request; urllib.request.urlretrieve('https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js', 'static/echarts.min.js')" && \
-    test -s static/echarts.min.js && echo "echarts downloaded OK"
-
-RUN mkdir -p /data
+RUN echo "Building aircat-server-web v$(cat VERSION)" && mkdir -p /data
 
 VOLUME ["/data"]
 
