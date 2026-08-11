@@ -671,13 +671,21 @@ def create_storage(engine, db_path):
 
 
 # ========== 数据迁移 ==========
-def migrate_storage(src_storage, target_engine, target_path=None):
+def migrate_storage(src_storage, target_engine, target_path=None, progress_cb=None):
     """将数据从 src_storage 迁移到 target_engine 的新库
 
     - target_path: 目标库文件路径，None 则自动推导（同目录，扩展名替换）
+    - progress_cb: 可选回调函数 progress_cb(stage, current, total, message)
     - 返回: (new_storage, migrated_count) 或抛异常
     - 旧库文件保留不动（作为备份）
     """
+    def _cb(stage, current, total, message):
+        if progress_cb:
+            try:
+                progress_cb(stage, current, total, message)
+            except Exception:
+                pass
+
     target_engine = target_engine.lower()
     if target_engine not in ('sqlite', 'duckdb'):
         raise ValueError(f"Unsupported target engine: {target_engine}")
@@ -692,18 +700,24 @@ def migrate_storage(src_storage, target_engine, target_path=None):
             target_path = base + '.new' + ext
 
     _log(f"Migrating data: {src_storage.engine_name}({src_storage.db_path}) -> {target_engine}({target_path})", 0)
+    _cb('init', 0, 0, f"准备从 {src_storage.engine_name} 迁移到 {target_engine}")
 
     # 如果目标文件已存在，先删除（重新导入）
     if os.path.exists(target_path):
         os.remove(target_path)
 
     # 创建目标库（不启动清理线程，迁移期间不需要）
+    _cb('create', 0, 0, "创建目标数据库")
     dst = create_storage(target_engine, target_path)
     # 停掉目标的清理线程（避免迁移期间触发清理）
     # 清理线程是 daemon，无法主动停止，但迁移很快，影响可忽略
 
     # 导出源数据
+    _cb('export', 0, 0, "导出源数据")
     settings, sensor_data, aggregated = src_storage.export_all()
+    total_records = len(settings) + len(sensor_data) + len(aggregated)
+    _cb('export_done', total_records, total_records, f"导出完成：设置 {len(settings)} 条，原始数据 {len(sensor_data)} 条，聚合数据 {len(aggregated)} 条")
+
     total = 0
 
     with dst.lock:
@@ -713,11 +727,14 @@ def migrate_storage(src_storage, target_engine, target_path=None):
         dst.conn.execute('DELETE FROM sensor_data_aggregated')
 
         # 写入 settings
-        for s in settings:
+        _cb('settings', 0, len(settings), "迁移设置数据")
+        for i, s in enumerate(settings):
             dst.conn.execute(
                 'INSERT INTO settings (key, value) VALUES (?, ?)',
                 (s['key'], s['value'])
             )
+            if (i + 1) % 50 == 0 or i + 1 == len(settings):
+                _cb('settings', i + 1, len(settings), f"设置数据 {i + 1}/{len(settings)}")
         # 更新 db_engine 设置为目标引擎
         dst.conn.execute(
             "INSERT INTO settings (key, value) VALUES ('db_engine', ?) "
@@ -727,17 +744,21 @@ def migrate_storage(src_storage, target_engine, target_path=None):
         total += len(settings)
 
         # 写入 sensor_data
-        for r in sensor_data:
+        _cb('sensor_data', 0, len(sensor_data), "迁移原始数据")
+        for i, r in enumerate(sensor_data):
             dst.conn.execute(
                 'INSERT INTO sensor_data (humidity, temperature, pm25, hcho, client_ip, timestamp) '
                 'VALUES (?, ?, ?, ?, ?, ?)',
                 (r.get('humidity'), r.get('temperature'), r.get('pm25'),
                  r.get('hcho'), r.get('client_ip'), r.get('timestamp'))
             )
+            if (i + 1) % 200 == 0 or i + 1 == len(sensor_data):
+                _cb('sensor_data', i + 1, len(sensor_data), f"原始数据 {i + 1}/{len(sensor_data)}")
         total += len(sensor_data)
 
         # 写入聚合数据
-        for r in aggregated:
+        _cb('aggregated', 0, len(aggregated), "迁移聚合数据")
+        for i, r in enumerate(aggregated):
             dst.conn.execute(
                 "INSERT INTO sensor_data_aggregated "
                 "(level, timestamp, avg_humidity, avg_temperature, avg_pm25, avg_hcho, "
@@ -754,9 +775,12 @@ def migrate_storage(src_storage, target_engine, target_path=None):
                  r.get('min_pm25'), r.get('max_pm25'),
                  r.get('min_hcho'), r.get('max_hcho'), r.get('count'))
             )
+            if (i + 1) % 100 == 0 or i + 1 == len(aggregated):
+                _cb('aggregated', i + 1, len(aggregated), f"聚合数据 {i + 1}/{len(aggregated)}")
         total += len(aggregated)
 
         dst.conn.commit()
 
+    _cb('done', total, total, f"迁移完成，共 {total} 条记录")
     _log(f"Migration complete: {total} records transferred to {target_engine}", 0)
     return dst, total

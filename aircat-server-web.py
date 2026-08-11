@@ -267,10 +267,11 @@ db_manager = None
 _migrate_lock = threading.Lock()
 
 
-def do_migrate_engine(target_engine):
+def do_migrate_engine(target_engine, progress_cb=None):
     """切换存储引擎并迁移本地数据。
 
     - target_engine: 'sqlite' 或 'duckdb'
+    - progress_cb: 可选回调 progress_cb(stage, current, total, message)
     - 迁移完成后切换全局 db_manager，更新 engine.conf
     - 旧库文件保留（作为备份）
     - 返回: (new_engine, migrated_count, old_path, new_path)
@@ -296,7 +297,7 @@ def do_migrate_engine(target_engine):
 
         _log(f"开始迁移：{db_manager.engine_name} -> {target_engine}", 0)
         new_storage, count = storage_backends.migrate_storage(
-            db_manager, target_engine, target_path
+            db_manager, target_engine, target_path, progress_cb=progress_cb
         )
 
         # 关闭旧库
@@ -594,7 +595,7 @@ class WebRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == '/api/migrate':
-            # 存储引擎迁移
+            # 存储引擎迁移（SSE 流式推送进度）
             if not db_manager:
                 self._send_json({'error': 'database not initialized'}, 503)
                 return
@@ -603,9 +604,34 @@ class WebRequestHandler(BaseHTTPRequestHandler):
                 self._send_json({'error': 'invalid json'}, 400)
                 return
             target = str(data.get('target', '')).lower().strip()
+
+            # SSE 流式响应
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/event-stream')
+            self.send_header('Cache-Control', 'no-cache')
+            self.send_header('X-Accel-Buffering', 'no')
+            self.end_headers()
+
+            def send_sse(event_type, data_dict):
+                try:
+                    payload = json.dumps(data_dict, ensure_ascii=False)
+                    self.wfile.write(f"event: {event_type}\ndata: {payload}\n\n".encode('utf-8'))
+                    self.wfile.flush()
+                except Exception:
+                    pass
+
+            def progress_cb(stage, current, total, message):
+                send_sse('progress', {
+                    'stage': stage,
+                    'current': current,
+                    'total': total,
+                    'message': message
+                })
+
             try:
-                new_engine, count, old_path, new_path = do_migrate_engine(target)
-                self._send_json({
+                send_sse('start', {'target': target})
+                new_engine, count, old_path, new_path = do_migrate_engine(target, progress_cb=progress_cb)
+                send_sse('complete', {
                     'success': True,
                     'engine': new_engine,
                     'migrated': count,
@@ -613,10 +639,10 @@ class WebRequestHandler(BaseHTTPRequestHandler):
                     'new_path': new_path
                 })
             except ValueError as e:
-                self._send_json({'error': str(e)}, 400)
+                send_sse('error', {'error': str(e)})
             except Exception as e:
                 _log(f"Migration failed: {e}", 2)
-                self._send_json({'error': f'迁移失败: {e}'}, 500)
+                send_sse('error', {'error': f'迁移失败: {e}'})
             return
 
         self.send_error(404, 'Not Found')
@@ -808,13 +834,16 @@ class M1Server:
                     total_data_count += 1
 
                     # 亮度控制
-                    if db_manager and data and len(data) >= 23:
+                    if db_manager:
                         brightness = get_current_brightness(db_manager)
                         if brightness >= 0:
                             try:
                                 conn.settimeout(SEND_TIMEOUT)
-                                brightness_json = json.dumps({"brightness": brightness})
-                                brightness_msg = data[:23] + b'\x00\x18\x00\x00\x02' + brightness_json.encode('utf-8') + b'\xff#END#'
+                                brightness_json = json.dumps({"brightness": brightness}, separators=(',', ':'))
+                                json_bytes = brightness_json.encode('utf-8')
+                                # GET_MSG 结构：[0:23]固定包头 + [23]0x00 + [24]消息长度 + [25:27]0x0000 + [27]0x02 + JSON + 0xff + #END#
+                                length_byte = len(json_bytes) + 6  # marker(5) + json + 0xff(1)
+                                brightness_msg = GET_MSG[:23] + bytes([0x00, length_byte, 0x00, 0x00, 0x02]) + json_bytes + b'\xff#END#'
                                 conn.sendall(brightness_msg)
                                 _log(f"Sent brightness control: {brightness} to {addr}", 3)
                             except Exception as e:

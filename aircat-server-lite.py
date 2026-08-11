@@ -261,11 +261,13 @@ class M1Server:
 
                     # 处理完数据后，检查亮度控制
                     brightness = get_current_brightness()
-                    if brightness >= 0 and data and len(data) >= 23:
+                    if brightness >= 0:
                         try:
                             conn.settimeout(SEND_TIMEOUT)
-                            brightness_json = json.dumps({"brightness": brightness})
-                            brightness_msg = data[:23] + b'\x00\x18\x00\x00\x02' + brightness_json.encode('utf-8') + b'\xff#END#'
+                            brightness_json = json.dumps({"brightness": brightness}, separators=(',', ':'))
+                            json_bytes = brightness_json.encode('utf-8')
+                            length_byte = len(json_bytes) + 6
+                            brightness_msg = GET_MSG[:23] + bytes([0x00, length_byte, 0x00, 0x00, 0x02]) + json_bytes + b'\xff#END#'
                             conn.sendall(brightness_msg)
                             _log(f"Sent brightness control: {brightness} to {addr}", 3)
                         except Exception as e:

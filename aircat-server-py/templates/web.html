@@ -1701,21 +1701,87 @@
                         if (!ok) { return; }
                         migrateBtn.disabled = true;
                         migrateBtn.textContent = "迁移中...";
-                        apiFetch("/api/migrate", {
+
+                        // 创建进度显示区域
+                        var progressDiv = document.createElement("div");
+                        progressDiv.style.cssText = "margin-top:8px;padding:8px;border-radius:4px;background:var(--bg-card);font-size:13px;line-height:1.6;";
+                        var progressBar = document.createElement("div");
+                        progressBar.style.cssText = "height:6px;border-radius:3px;background:var(--bg-hover);overflow:hidden;margin-bottom:6px;";
+                        var progressFill = document.createElement("div");
+                        progressFill.style.cssText = "height:100%;width:0%;border-radius:3px;background:var(--accent-color);transition:width 0.3s;";
+                        var progressText = document.createElement("div");
+                        progressText.style.cssText = "color:var(--text-secondary);";
+                        progressBar.appendChild(progressFill);
+                        progressDiv.appendChild(progressBar);
+                        progressDiv.appendChild(progressText);
+                        migrateBtn.parentElement.appendChild(progressDiv);
+
+                        // 使用 fetch + ReadableStream 接收 SSE
+                        fetch("/api/migrate", {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({ target: target })
-                        }).then(function (d) {
-                            showSettingsMsg("已切换到 " + targetName +
-                                "，迁移 " + (d.migrated || 0) + " 条记录。请重启容器使采集端生效。", "success");
-                            loadEngineInfo();
-                        }).catch(function (err) {
-                            if (err && err.status !== 401) {
-                                var m = "迁移失败";
-                                if (err && err.body && err.body.error) { m = err.body.error; }
-                                showSettingsMsg(m, "error");
+                        }).then(function (resp) {
+                            var reader = resp.body.getReader();
+                            var decoder = new TextDecoder();
+                            var buffer = "";
+
+                            function processBuffer() {
+                                var lines = buffer.split("\n");
+                                buffer = lines.pop();
+                                var eventType = "";
+                                for (var i = 0; i < lines.length; i++) {
+                                    var line = lines[i];
+                                    if (line.startsWith("event: ")) {
+                                        eventType = line.substring(7).trim();
+                                    } else if (line.startsWith("data: ")) {
+                                        var dataStr = line.substring(6);
+                                        try {
+                                            var d = JSON.parse(dataStr);
+                                            handleSseEvent(eventType, d);
+                                        } catch (e) {}
+                                    } else if (line === "") {
+                                        eventType = "";
+                                    }
+                                }
                             }
-                        }).finally(function () {
+
+                            function handleSseEvent(type, d) {
+                                if (type === "progress") {
+                                    var pct = d.total > 0 ? Math.round(d.current / d.total * 100) : 0;
+                                    progressFill.style.width = pct + "%";
+                                    progressText.textContent = d.message + " (" + pct + "%)";
+                                } else if (type === "complete") {
+                                    progressFill.style.width = "100%";
+                                    progressText.textContent = "";
+                                    showSettingsMsg("已切换到 " + targetName +
+                                        "，迁移 " + (d.migrated || 0) + " 条记录。请重启容器使采集端生效。", "success");
+                                    loadEngineInfo();
+                                    setTimeout(function () {
+                                        if (progressDiv.parentNode) { progressDiv.parentNode.removeChild(progressDiv); }
+                                    }, 3000);
+                                    migrateBtn.disabled = false;
+                                    migrateBtn.textContent = "迁移并切换";
+                                } else if (type === "error") {
+                                    showSettingsMsg(d.error || "迁移失败", "error");
+                                    if (progressDiv.parentNode) { progressDiv.parentNode.removeChild(progressDiv); }
+                                    migrateBtn.disabled = false;
+                                    migrateBtn.textContent = "迁移并切换";
+                                }
+                            }
+
+                            function pump() {
+                                reader.read().then(function (result) {
+                                    if (result.done) { return; }
+                                    buffer += decoder.decode(result.value, { stream: true });
+                                    processBuffer();
+                                    pump();
+                                }).catch(function () {});
+                            }
+                            pump();
+                        }).catch(function (err) {
+                            showSettingsMsg("迁移请求失败", "error");
+                            if (progressDiv.parentNode) { progressDiv.parentNode.removeChild(progressDiv); }
                             migrateBtn.disabled = false;
                             migrateBtn.textContent = "迁移并切换";
                         });
