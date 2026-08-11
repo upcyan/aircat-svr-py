@@ -11,8 +11,10 @@ import os
 time_sleep = 5        # 采集间隔（秒）
 SOCKET_PORT = 9000    # 监听端口
 BUFFER_SIZE = 4096    # 接收缓冲区（增大以处理更大数据包）
-RECV_TIMEOUT = 10     # 单次接收超时时间（秒），缩短以快速检测网络问题
-MAX_RETRY = 3         # 超时最大重试次数，超过则断开连接重连
+RECV_TIMEOUT = 15     # 单次接收超时时间（秒），给 IoT 设备足够的响应时间
+MAX_RETRY = 10        # 超时最大重试次数，IoT 设备低功耗/网络波动较频繁，放宽阈值
+SEND_TIMEOUT = 10     # 发送阶段超时时间（秒）
+CHUNK_TIMEOUT = 3     # 分片读取额外数据的超时（秒），缩短以避免阻塞主循环
 
 # M1设备查询指令（保持原样）
 GET_MSG = b'\xaaO\x01%F\x119\x8f\x0b\x00\x00\x00\x00\x00\x00\x00\x00\xb0\xf8\x93\x11dR\x007\x00\x00\x02{"type":5,"status":1}\xff#END#'
@@ -164,27 +166,51 @@ class M1Server:
     def _handle_client(self, conn, addr):
         """处理单个客户端连接"""
         _log(f"New connection from {addr}", 0)
-        
+
         conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-        conn.settimeout(RECV_TIMEOUT)
-        
+        # 启用 TCP keepalive 参数，更快检测死连接
+        try:
+            if hasattr(socket, 'TCP_KEEPIDLE'):
+                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)   # 60s 空闲开始探测
+            if hasattr(socket, 'TCP_KEEPINTVL'):
+                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10) # 每 10s 探测一次
+            if hasattr(socket, 'TCP_KEEPCNT'):
+                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 5)    # 5 次失败判定断开
+        except Exception:
+            pass
+
         consecutive_timeout = 0
         total_data_count = 0
-        
+
         try:
             while self.running:
+                # ---------- 阶段 1：发送查询指令 ----------
                 try:
+                    conn.settimeout(SEND_TIMEOUT)
                     _log(f"Client {addr} sending query...", 3)
                     conn.sendall(GET_MSG)
                     _log(f"Client {addr} query sent, waiting for response...", 3)
-                    
+                except (socket.timeout, OSError, ConnectionError) as e:
+                    _log(f"Client {addr} send query failed: {e}", 1)
+                    # 发送失败直接计入超时，不给太多重试机会（通常意味着连接已断）
+                    consecutive_timeout += 2
+                    if consecutive_timeout >= MAX_RETRY:
+                        _log(f"Client {addr} consecutive send failures, closing connection", 2)
+                        break
+                    time.sleep(2)
+                    continue
+
+                # ---------- 阶段 2：接收首包数据 ----------
+                try:
+                    conn.settimeout(RECV_TIMEOUT)
                     data = conn.recv(BUFFER_SIZE)
-                    
+
                     if not data:
                         _log(f"Client {addr} closed connection (empty recv)", 0)
                         break
-                    
-                    conn.settimeout(2)
+
+                    # ---------- 阶段 3：接收剩余分片 ----------
+                    conn.settimeout(CHUNK_TIMEOUT)
                     while True:
                         try:
                             chunk = conn.recv(BUFFER_SIZE)
@@ -193,41 +219,24 @@ class M1Server:
                             data += chunk
                         except socket.timeout:
                             break
-                    
-                    conn.settimeout(RECV_TIMEOUT)
-                    
-                    json_data = self._parse_data(data)
-                    if json_data:
-                        self._process_data(json_data, addr)
-                        total_data_count += 1
-                        consecutive_timeout = 0
-                    else:
-                        _log(f"Client {addr} received data but no valid JSON (len={len(data)})", 1)
 
-                    # 处理完数据后，检查亮度控制
-                    brightness = get_current_brightness()
-                    if brightness >= 0 and data and len(data) >= 23:
-                        try:
-                            brightness_json = json.dumps({"brightness": brightness})
-                            brightness_msg = data[:23] + b'\x00\x18\x00\x00\x02' + brightness_json.encode('utf-8') + b'\xff#END#'
-                            conn.sendall(brightness_msg)
-                            _log(f"Sent brightness control: {brightness} to {addr}", 3)
-                        except Exception as e:
-                            _log(f"Brightness control error: {e}", 1)
-
-                    time.sleep(time_sleep)
-                    
                 except socket.timeout:
                     consecutive_timeout += 1
-                    _log(f"Client {addr} recv timeout ({consecutive_timeout}/{MAX_RETRY}), data received: {total_data_count}", 1)
-                    
+                    _log(
+                        f"Client {addr} recv timeout ({consecutive_timeout}/{MAX_RETRY}), "
+                        f"data packets received: {total_data_count}",
+                        1 if consecutive_timeout < MAX_RETRY // 2 else 2
+                    )
                     if consecutive_timeout >= MAX_RETRY:
-                        _log(f"Client {addr} max recv timeout reached ({MAX_RETRY}), closing connection", 2)
+                        _log(
+                            f"Client {addr} max recv timeout reached ({MAX_RETRY}), "
+                            f"closing connection (total packets: {total_data_count})",
+                            2
+                        )
                         break
-                    
                     time.sleep(1)
                     continue
-                    
+
                 except ConnectionResetError:
                     _log(f"Client {addr} reset connection (ConnectionResetError)", 1)
                     break
@@ -238,24 +247,50 @@ class M1Server:
                     _log(f"Client {addr} connection aborted", 1)
                     break
                 except OSError as e:
-                    _log(f"Client {addr} OS error: {e}", 2)
+                    _log(f"Client {addr} OS error on recv: {e}", 2)
                     break
-                except Exception as e:
-                    _log(f"Client {addr} unexpected error: {e}", 2)
-                    consecutive_timeout += 1
-                    if consecutive_timeout >= MAX_RETRY:
-                        break
-                    time.sleep(1)
-                    continue
-                    
+
+                # ---------- 阶段 4：解析与处理数据 ----------
+                # 数据接收成功，重置超时计数器
+                consecutive_timeout = 0
+
+                json_data = self._parse_data(data)
+                if json_data:
+                    self._process_data(json_data, addr)
+                    total_data_count += 1
+
+                    # 处理完数据后，检查亮度控制
+                    brightness = get_current_brightness()
+                    if brightness >= 0 and data and len(data) >= 23:
+                        try:
+                            conn.settimeout(SEND_TIMEOUT)
+                            brightness_json = json.dumps({"brightness": brightness})
+                            brightness_msg = data[:23] + b'\x00\x18\x00\x00\x02' + brightness_json.encode('utf-8') + b'\xff#END#'
+                            conn.sendall(brightness_msg)
+                            _log(f"Sent brightness control: {brightness} to {addr}", 3)
+                        except Exception as e:
+                            _log(f"Brightness control error: {e}", 1)
+                else:
+                    _log(f"Client {addr} received data but no valid JSON (len={len(data)})", 1)
+
+                # 等待下一次采集
+                try:
+                    conn.settimeout(None)  # sleep 期间不需要超时
+                except Exception:
+                    pass
+                time.sleep(time_sleep)
+
         except Exception as e:
             _log(f"Client {addr} fatal error: {e}", 2)
         finally:
             try:
                 conn.shutdown(socket.SHUT_RDWR)
-            except:
+            except Exception:
                 pass
-            conn.close()
+            try:
+                conn.close()
+            except Exception:
+                pass
             _log(f"Connection closed: {addr}, total data packets: {total_data_count}", 0)
     
     def _parse_data(self, data):
