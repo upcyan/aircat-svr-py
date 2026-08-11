@@ -1,6 +1,9 @@
 FROM python:3.14-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends tzdata && \
+# 安装安全更新（修复 Debian 基础镜像中的已知 CVE）+ 必要依赖
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    apt-get install -y --no-install-recommends tzdata && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /aircat-server
