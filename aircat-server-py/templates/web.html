@@ -1333,6 +1333,38 @@
                 if (el) { el.textContent = text; }
             };
 
+            // 将 "YYYY-MM-DD HH:MM:SS" 格式的北京时区字符串解析为 UTC 毫秒数
+            // 数据库存储的是北京时区的本地时间字符串，解析时需要显式指定 +08:00 偏移
+            function parseBeijingTimeToMs(s) {
+                if (!s) { return NaN; }
+                if (typeof s === "number") { return s * 1000; }
+                var m = String(s).trim().match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+                if (m) {
+                    // 用 Date.UTC 构造对应北京时间的 UTC 毫秒数：北京时间 = UTC + 8h
+                    // 所以把年月日时分秒当作 UTC+8 的本地时间，减去 8 小时得到真正的 UTC 时刻
+                    return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) - 8 * 3600 * 1000;
+                }
+                var t = Date.parse(s);
+                return isNaN(t) ? NaN : t;
+            }
+
+            // 把 UTC 毫秒数 / 北京时区字符串 格式化为 北京时区 "YYYY-MM-DD HH:MM:SS"
+            function formatBeijingTime(ts) {
+                if (ts === null || ts === undefined || ts === "") { return "--"; }
+                var ms;
+                if (typeof ts === "number") {
+                    ms = ts;
+                } else {
+                    ms = parseBeijingTimeToMs(ts);
+                    if (isNaN(ms)) { return String(ts); }
+                }
+                // 将 UTC 毫秒数 加 8 小时，得到北京时间的"伪UTC"表示，再用 UTC 方法取字段
+                var d = new Date(ms + 8 * 3600 * 1000);
+                var pad = function (n) { return n < 10 ? "0" + n : n; };
+                return d.getUTCFullYear() + "-" + pad(d.getUTCMonth() + 1) + "-" + pad(d.getUTCDate()) +
+                    " " + pad(d.getUTCHours()) + ":" + pad(d.getUTCMinutes()) + ":" + pad(d.getUTCSeconds());
+            }
+
             var getToken = function () {
                 try { return localStorage.getItem(TOKEN_KEY) || ""; }
                 catch (e) { return ""; }
@@ -1799,7 +1831,8 @@
                         setText("val-pm25", fmt(d.pm25, 0));
                         setText("val-hcho", fmt(d.hcho, 3));
                         if (d.timestamp) {
-                            setText("last-update", d.timestamp);
+                            // 按北京时区格式化显示最后更新时间
+                            setText("last-update", formatBeijingTime(d.timestamp));
                         }
                     })
                     .catch(function (err) {
@@ -1809,19 +1842,9 @@
                     });
             }
 
-            // 解析时间为时间戳，支持 "YYYY-MM-DD HH:MM:SS" 格式
+            // 解析时间为 UTC 毫秒数，数据库中"YYYY-MM-DD HH:MM:SS"是北京时区本地时间
             function parseTime(s) {
-                if (!s) { return NaN; }
-                if (typeof s === "number") { return s * 1000; }
-                // 兼容 "YYYY-MM-DD HH:MM:SS"（空格分隔，Safari 等不支持）
-                var m = String(s).trim().match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
-                if (m) {
-                    return new Date(
-                        +m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]
-                    ).getTime();
-                }
-                var t = Date.parse(s);
-                return isNaN(t) ? NaN : t;
+                return parseBeijingTimeToMs(s);
             }
 
             // 获取历史数据并更新图表
@@ -1962,12 +1985,14 @@
                         itemGap: 8,
                         icon: "roundRect"
                     };
-                    // 移动端 grid 紧凑，图例到底部后 top 可缩小
-                    // 左右边距对称设置：containLabel 会自动为轴标签计算额外空间
+                    // 移动端：
+                    // - left/right: 0 即可 (containLabel=true 自动处理轴标签)，
+                    //   #chart 外层 .chart-section 已有 padding，视觉上与时间区间选择器对齐
+                    // - top: 加大到 28，增加图表与上方标题/时间区间组件的距离
                     gridOpt = {
-                        top: 12,
-                        left: 24,
-                        right: 24,
+                        top: 28,
+                        left: 0,
+                        right: 0,
                         bottom: 80,
                         containLabel: true
                     };
@@ -2002,10 +2027,11 @@
                         itemHeight: 10,
                         itemGap: 18
                     };
+                    // 桌面端：加大 top，让图表与上方图例间距更宽松；left/right 对称
                     gridOpt = {
-                        top: 50,
-                        left: 12,
-                        right: 12,
+                        top: 68,
+                        left: 8,
+                        right: 8,
                         bottom: 70,
                         containLabel: true
                     };
@@ -2053,13 +2079,10 @@
                             var html = "";
                             var ts = params[0].axisValue;
                             if (typeof ts === "number") {
-                                var d = new Date(ts);
-                                var pad = function (n) { return n < 10 ? "0" + n : n; };
-                                html += d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" +
-                                    pad(d.getDate()) + " " + pad(d.getHours()) + ":" +
-                                    pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+                                // 轴值是 UTC 毫秒数，按北京时区格式化
+                                html += formatBeijingTime(ts);
                             } else {
-                                html += ts;
+                                html += formatBeijingTime(ts);
                             }
                             html += "<br/>";
                             for (var i = 0; i < params.length; i++) {
@@ -2169,8 +2192,9 @@
                         lastMobile = nowMobile;
                         chart.setOption({
                             grid: {
-                                left: nowMobile ? 24 : 12,
-                                right: nowMobile ? 24 : 12,
+                                top: nowMobile ? 28 : 68,
+                                left: nowMobile ? 0 : 8,
+                                right: nowMobile ? 0 : 8,
                                 bottom: nowMobile ? 80 : 70
                             },
                             legend: {

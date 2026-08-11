@@ -10,6 +10,33 @@ import os
 import threading
 import time
 import sqlite3
+from datetime import datetime
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    # Python < 3.9 兼容，实际 aircat-server-web 已用 pytz
+    ZoneInfo = None
+
+_BEIJING_TZ = None
+def _beijing_now_str():
+    """返回北京时区的当前时间字符串 YYYY-MM-DD HH:MM:SS"""
+    global _BEIJING_TZ
+    if _BEIJING_TZ is None:
+        if ZoneInfo is not None:
+            try:
+                _BEIJING_TZ = ZoneInfo('Asia/Shanghai')
+            except Exception:
+                _BEIJING_TZ = False
+        if _BEIJING_TZ is None or _BEIJING_TZ is False:
+            try:
+                import pytz
+                _BEIJING_TZ = pytz.timezone('Asia/Shanghai')
+            except Exception:
+                _BEIJING_TZ = False
+    if _BEIJING_TZ is False or _BEIJING_TZ is None:
+        return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    return datetime.now(_BEIJING_TZ).strftime('%Y-%m-%d %H:%M:%S')
 
 # 日志由外部注入（避免循环导入）
 _logger = None
@@ -148,11 +175,13 @@ class BaseStorage:
         return {key: self.get_setting(key) for key in SETTING_DEFAULTS}
 
     # ---------- 数据读写 ----------
-    def insert(self, humidity, temperature, pm25, hcho, client_ip):
+    def insert(self, humidity, temperature, pm25, hcho, client_ip, timestamp=None):
         with self.lock:
+            if timestamp is None:
+                timestamp = _beijing_now_str()
             self.conn.execute(
-                'INSERT INTO sensor_data (humidity, temperature, pm25, hcho, client_ip) VALUES (?, ?, ?, ?, ?)',
-                (humidity, temperature, pm25, hcho, client_ip)
+                'INSERT INTO sensor_data (timestamp, humidity, temperature, pm25, hcho, client_ip) VALUES (?, ?, ?, ?, ?, ?)',
+                (timestamp, humidity, temperature, pm25, hcho, client_ip)
             )
             self.conn.commit()
         self.cleanup_data()
