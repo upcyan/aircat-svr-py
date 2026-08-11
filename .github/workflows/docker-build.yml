@@ -49,6 +49,13 @@ jobs:
           platforms: linux/amd64,linux/arm64
           build-args: |
             APP_VERSION=${{ steps.version.outputs.current_version }}
+          labels: |
+            org.opencontainers.image.title=aircat-server-lite
+            org.opencontainers.image.description=Phicomm M1 air quality monitor server (lite version)
+            org.opencontainers.image.version=${{ steps.version.outputs.current_version }}
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           tags: |
             ${{ secrets.DOCKER_USERNAME }}/aircat-server-lite:latest
             ${{ secrets.DOCKER_USERNAME }}/aircat-server-lite:${{ steps.version.outputs.current_version }}
@@ -62,6 +69,13 @@ jobs:
           platforms: linux/amd64,linux/arm64
           build-args: |
             APP_VERSION=${{ steps.version.outputs.current_version }}
+          labels: |
+            org.opencontainers.image.title=aircat-server-web
+            org.opencontainers.image.description=Phicomm M1 air quality monitor server (full version with web UI)
+            org.opencontainers.image.version=${{ steps.version.outputs.current_version }}
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           tags: |
             ${{ secrets.DOCKER_USERNAME }}/aircat-server-web:latest
             ${{ secrets.DOCKER_USERNAME }}/aircat-server-web:${{ steps.version.outputs.current_version }}
