@@ -36,10 +36,14 @@ WORKDIR /aircat-server
 COPY --from=deps-stage /pylibs /usr/local/lib/python3.14/site-packages/
 COPY --from=echarts-stage /static ./static
 
+COPY VERSION .
+
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
+
 COPY aircat-server-web.py .
 COPY storage_backends.py .
 COPY aircat-server-py/templates/web.html ./aircat-server-py/templates/
-COPY VERSION .
 
 RUN echo "Building aircat-server-web v$(cat VERSION)" && mkdir -p /data
 
