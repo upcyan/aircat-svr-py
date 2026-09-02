@@ -15,9 +15,9 @@ from urllib.parse import urlparse, parse_qs
 time_sleep = 5        # 采集间隔（秒）
 SOCKET_PORT = 9000    # 监听端口
 BUFFER_SIZE = 4096    # 接收缓冲区（增大以处理更大数据包）
-RECV_TIMEOUT = 15     # 单次接收超时时间（秒），给 IoT 设备足够的响应时间
-MAX_RETRY = 10        # 超时最大重试次数，IoT 设备低功耗/网络波动较频繁，放宽阈值
-SEND_TIMEOUT = 10     # 发送阶段超时时间（秒）
+RECV_TIMEOUT = 10     # 单次接收超时时间（秒），缩短以更快检测断线
+MAX_RETRY = 3         # 连续超时最大重试次数，快速断开死连接促使设备重连
+SEND_TIMEOUT = 5      # 发送阶段超时时间（秒），缩短以更快检测断线
 CHUNK_TIMEOUT = 3     # 分片读取额外数据的超时（秒），缩短以避免阻塞主循环
 
 # M1设备查询指令（保持原样）
@@ -697,6 +697,22 @@ class M1Server:
         self.server_socket = None
         self.running = False
         self.clients = []  # 跟踪客户端线程
+        self._conn_map = {}  # {client_ip: conn} 追踪活跃连接，用于同IP重连时关闭旧连接
+        self._conn_lock = threading.Lock()
+
+    def _register_conn(self, ip, conn):
+        """注册连接，返回应被关闭的旧连接（如有）"""
+        old_conn = None
+        with self._conn_lock:
+            old_conn = self._conn_map.get(ip)
+            self._conn_map[ip] = conn
+        return old_conn
+
+    def _unregister_conn(self, ip, conn):
+        """注销连接（仅当当前注册的是同一连接时）"""
+        with self._conn_lock:
+            if self._conn_map.get(ip) is conn:
+                del self._conn_map[ip]
 
     def start(self):
         """启动服务器"""
@@ -717,6 +733,21 @@ class M1Server:
 
                     # 清理已结束的客户端线程，防止内存泄漏
                     self.clients = [t for t in self.clients if t.is_alive()]
+
+                    client_ip = addr[0] if isinstance(addr, tuple) else str(addr)
+
+                    # 同一 IP 新连接到达时，关闭旧连接（断网重连场景）
+                    old_conn = self._register_conn(client_ip, conn)
+                    if old_conn is not None:
+                        _log(f"New connection from {addr}, closing stale connection for {client_ip}", 1)
+                        try:
+                            old_conn.shutdown(socket.SHUT_RDWR)
+                        except Exception:
+                            pass
+                        try:
+                            old_conn.close()
+                        except Exception:
+                            pass
 
                     client_thread = threading.Thread(
                         target=self._handle_client,
@@ -740,16 +771,18 @@ class M1Server:
     def _handle_client(self, conn, addr):
         """处理单个客户端连接"""
         _log(f"New connection from {addr}", 0)
+        client_ip = addr[0] if isinstance(addr, tuple) else str(addr)
+        self._register_conn(client_ip, conn)
 
         conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-        # 启用 TCP keepalive 参数，更快检测死连接
+        # 启用 TCP keepalive 参数，更快检测死连接（断网后 ~30s 内检测到）
         try:
             if hasattr(socket, 'TCP_KEEPIDLE'):
-                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)   # 60s 空闲开始探测
+                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 15)   # 15s 空闲开始探测
             if hasattr(socket, 'TCP_KEEPINTVL'):
-                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10) # 每 10s 探测一次
+                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 5)  # 每 5s 探测一次
             if hasattr(socket, 'TCP_KEEPCNT'):
-                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 5)    # 5 次失败判定断开
+                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)    # 3 次失败判定断开
         except Exception:
             pass
 
@@ -765,14 +798,9 @@ class M1Server:
                     conn.sendall(GET_MSG)
                     _log(f"Client {addr} query sent, waiting for response...", 3)
                 except (socket.timeout, OSError, ConnectionError) as e:
-                    _log(f"Client {addr} send query failed: {e}", 1)
-                    # 发送失败直接计入超时，不给太多重试机会（通常意味着连接已断）
-                    consecutive_timeout += 2
-                    if consecutive_timeout >= MAX_RETRY:
-                        _log(f"Client {addr} consecutive send failures, closing connection", 2)
-                        break
-                    time.sleep(2)
-                    continue
+                    # 发送失败意味着连接已断，立即关闭促使设备重连
+                    _log(f"Client {addr} send failed: {e}, closing connection", 1)
+                    break
 
                 # ---------- 阶段 2：接收首包数据 ----------
                 try:
@@ -861,6 +889,7 @@ class M1Server:
         except Exception as e:
             _log(f"Client {addr} fatal error: {e}", 2)
         finally:
+            self._unregister_conn(client_ip, conn)
             try:
                 conn.shutdown(socket.SHUT_RDWR)
             except Exception:
