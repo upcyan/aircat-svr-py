@@ -3,6 +3,7 @@ name: Build and Push Docker Images
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -28,6 +29,10 @@ jobs:
           echo "current_version=$VERSION" >> $GITHUB_OUTPUT
           echo "Current version: $VERSION"
 
+      - name: Generate image metadata
+        id: image_meta
+        run: echo "created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -41,11 +46,14 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Build and push lite image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./lite.Dockerfile
           push: true
+          pull: true
+          provenance: false
+          sbom: false
           platforms: linux/amd64,linux/arm64
           build-args: |
             APP_VERSION=${{ steps.version.outputs.current_version }}
@@ -53,19 +61,23 @@ jobs:
             org.opencontainers.image.title=aircat-server-lite
             org.opencontainers.image.description=Phicomm M1 air quality monitor server (lite version)
             org.opencontainers.image.version=${{ steps.version.outputs.current_version }}
-            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+            org.opencontainers.image.created=${{ steps.image_meta.outputs.created }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           tags: |
             ${{ secrets.DOCKER_USERNAME }}/aircat-server-lite:latest
             ${{ secrets.DOCKER_USERNAME }}/aircat-server-lite:${{ steps.version.outputs.current_version }}
+            ${{ secrets.DOCKER_USERNAME }}/aircat-server-lite:sha-${{ github.sha }}
 
       - name: Build and push web image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./web.Dockerfile
           push: true
+          pull: true
+          provenance: false
+          sbom: false
           platforms: linux/amd64,linux/arm64
           build-args: |
             APP_VERSION=${{ steps.version.outputs.current_version }}
@@ -73,12 +85,13 @@ jobs:
             org.opencontainers.image.title=aircat-server-web
             org.opencontainers.image.description=Phicomm M1 air quality monitor server (full version with web UI)
             org.opencontainers.image.version=${{ steps.version.outputs.current_version }}
-            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+            org.opencontainers.image.created=${{ steps.image_meta.outputs.created }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           tags: |
             ${{ secrets.DOCKER_USERNAME }}/aircat-server-web:latest
             ${{ secrets.DOCKER_USERNAME }}/aircat-server-web:${{ steps.version.outputs.current_version }}
+            ${{ secrets.DOCKER_USERNAME }}/aircat-server-web:sha-${{ github.sha }}
 
       - name: Increment version
         run: |

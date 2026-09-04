@@ -1,7 +1,9 @@
 # ===== 阶段1：下载 echarts（不进入最终镜像）=====
 FROM python:3.14-slim AS echarts-stage
+ARG ECHARTS_VERSION=5.6.0
+ARG ECHARTS_SHA256=bf4a223524e40b77c304bec67e1222cf551f14880cf42c69dc046558e11c07b1
 RUN mkdir -p /static && \
-    python -c "import urllib.request; urllib.request.urlretrieve('https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js', '/static/echarts.min.js')" && \
+    python -c "import hashlib,urllib.request; data=urllib.request.urlopen('https://cdn.jsdelivr.net/npm/echarts@${ECHARTS_VERSION}/dist/echarts.min.js', timeout=15).read(); assert hashlib.sha256(data).hexdigest() == '${ECHARTS_SHA256}', 'echarts checksum mismatch'; open('/static/echarts.min.js','wb').write(data)" && \
     test -s /static/echarts.min.js
 
 # ===== 阶段2：安装 pip 依赖（不进入最终镜像）=====
@@ -48,10 +50,14 @@ LABEL org.opencontainers.image.title="aircat-server-web" \
 
 COPY aircat-server-web.py .
 COPY storage_backends.py .
+COPY server_common.py .
 COPY aircat-server-py/templates/web.html ./aircat-server-py/templates/
 
 RUN echo "Building aircat-server-web v$(cat VERSION)" && mkdir -p /data
 
 VOLUME ["/data"]
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD python -c "import os,socket; s=socket.create_connection(('127.0.0.1',int(os.environ.get('WEB_PORT','8080'))),2); s.close()" || exit 1
 
 ENTRYPOINT ["python", "aircat-server-web.py"]

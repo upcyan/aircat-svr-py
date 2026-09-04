@@ -8,8 +8,11 @@ import logging
 import os
 import sqlite3
 import hashlib
+import hmac
+import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
+from server_common import FrameReadError, recv_bounded_frame
 
 # ========== 配置区 ==========
 time_sleep = 5        # 采集间隔（秒）
@@ -19,6 +22,9 @@ RECV_TIMEOUT = 10     # 单次接收超时时间（秒），缩短以更快检�
 MAX_RETRY = 3         # 连续超时最大重试次数，快速断开死连接促使设备重连
 SEND_TIMEOUT = 5      # 发送阶段超时时间（秒），缩短以更快检测断线
 CHUNK_TIMEOUT = 3     # 分片读取额外数据的超时（秒），缩短以避免阻塞主循环
+MAX_FRAME_BYTES = max(BUFFER_SIZE, int(os.environ.get('MAX_FRAME_BYTES', '65536')))
+MAX_FRAME_SECONDS = max(1, int(os.environ.get('MAX_FRAME_SECONDS', '10')))
+MAX_DEVICE_CLIENTS = max(1, int(os.environ.get('MAX_DEVICE_CLIENTS', '32')))
 
 # M1设备查询指令（保持原样）
 GET_MSG = b'\xaaO\x01%F\x119\x8f\x0b\x00\x00\x00\x00\x00\x00\x00\x00\xb0\xf8\x93\x11dR\x007\x00\x00\x02{"type":5,"status":1}\xff#END#'
@@ -29,7 +35,15 @@ WEB_PORT = int(os.environ.get('WEB_PORT', '8080'))
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_FILE = os.path.join(_BASE_DIR, 'aircat-server-py', 'templates', 'web.html')
 ECHARTS_FILE = os.path.join(_BASE_DIR, 'static', 'echarts.min.js')
-ECHARTS_CDN_URL = 'https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js'
+ECHARTS_VERSION = '5.6.0'
+ECHARTS_CDN_URL = f'https://cdn.jsdelivr.net/npm/echarts@{ECHARTS_VERSION}/dist/echarts.min.js'
+ECHARTS_SHA256 = 'bf4a223524e40b77c304bec67e1222cf551f14880cf42c69dc046558e11c07b1'
+MAX_HTTP_BODY_BYTES = max(1024, int(os.environ.get('MAX_HTTP_BODY_BYTES', '16384')))
+HTTP_REQUEST_TIMEOUT = max(1, int(os.environ.get('HTTP_REQUEST_TIMEOUT', '10')))
+MAX_HTTP_WORKERS = max(1, int(os.environ.get('MAX_HTTP_WORKERS', '16')))
+LOGIN_MAX_FAILURES = max(1, int(os.environ.get('LOGIN_MAX_FAILURES', '5')))
+LOGIN_WINDOW_SECONDS = max(1, int(os.environ.get('LOGIN_WINDOW_SECONDS', '300')))
+LOGIN_LOCKOUT_SECONDS = max(1, int(os.environ.get('LOGIN_LOCKOUT_SECONDS', '60')))
 
 # ---------- 读取容器版本号 ----------
 def _read_version():
@@ -334,16 +348,32 @@ _auth_lock = threading.Lock()
 TOKEN_EXPIRY = 3600  # 1 小时
 
 
-def generate_token(username, password):
-    """生成简单的 token：md5(username + password + timestamp)"""
-    raw = (str(username) + str(password) + str(time.time())).encode('utf-8')
-    return hashlib.md5(raw).hexdigest()
+def generate_token(username=None, password=None):
+    """生成不可预测的会话 token，不再混入长期密码。"""
+    return secrets.token_urlsafe(32)
+
+
+def _auth_fingerprint():
+    """Bind sessions to the persisted credential state, including CLI changes."""
+    if db_manager is None:
+        return None
+    try:
+        raw = '\0'.join(str(db_manager.get_setting(key) or '') for key in (
+            'auth_enabled', 'auth_user', 'auth_pass'
+        ))
+    except Exception:
+        return None
+    return hashlib.sha256(raw.encode('utf-8')).digest()
 
 
 def add_token(token):
     """登记一个 token，1 小时后过期"""
+    fingerprint = _auth_fingerprint()
+    if fingerprint is None:
+        return False
     with _auth_lock:
-        _auth_tokens[token] = time.time() + TOKEN_EXPIRY
+        _auth_tokens[token] = (time.time() + TOKEN_EXPIRY, fingerprint)
+    return True
 
 
 def is_valid_token(token):
@@ -351,22 +381,75 @@ def is_valid_token(token):
     if not token:
         return False
     with _auth_lock:
-        expiry = _auth_tokens.get(token)
-        if expiry is None:
+        session = _auth_tokens.get(token)
+        if session is None:
             return False
+        expiry, fingerprint = session
         if time.time() > expiry:
             _auth_tokens.pop(token, None)
             return False
-        return True
+    current_fingerprint = _auth_fingerprint()
+    if current_fingerprint is None or not hmac.compare_digest(fingerprint, current_fingerprint):
+        with _auth_lock:
+            _auth_tokens.pop(token, None)
+        return False
+    return True
 
 
 def cleanup_tokens():
     """清理已过期的 token"""
     with _auth_lock:
         now = time.time()
-        expired = [t for t, exp in _auth_tokens.items() if now > exp]
+        expired = [t for t, (exp, _) in _auth_tokens.items() if now > exp]
         for t in expired:
             del _auth_tokens[t]
+
+
+_login_attempts = {}
+_login_lock = threading.Lock()
+
+
+def _login_retry_after(client_ip):
+    now = time.monotonic()
+    with _login_lock:
+        state = _login_attempts.get(client_ip)
+        if not state:
+            return 0
+        failures = [t for t in state['failures'] if now - t < LOGIN_WINDOW_SECONDS]
+        state['failures'] = failures
+        if state['blocked_until'] > now:
+            return max(1, int(state['blocked_until'] - now + 0.999))
+        if not failures:
+            _login_attempts.pop(client_ip, None)
+        return 0
+
+
+def _record_login_result(client_ip, success):
+    now = time.monotonic()
+    with _login_lock:
+        if success:
+            _login_attempts.pop(client_ip, None)
+            return 0
+        state = _login_attempts.setdefault(
+            client_ip,
+            {'failures': [], 'blocked_until': 0, 'last_seen': now}
+        )
+        state['last_seen'] = now
+        state['failures'] = [t for t in state['failures'] if now - t < LOGIN_WINDOW_SECONDS]
+        state['failures'].append(now)
+        if len(state['failures']) >= LOGIN_MAX_FAILURES:
+            state['blocked_until'] = now + LOGIN_LOCKOUT_SECONDS
+            return LOGIN_LOCKOUT_SECONDS
+        # Keep attacker-controlled state bounded.
+        if len(_login_attempts) > 2048:
+            oldest = sorted(
+                (item.get('last_seen', 0), ip)
+                for ip, item in _login_attempts.items()
+                if ip != client_ip
+            )
+            for _, ip in oldest[:len(_login_attempts) - 1024]:
+                _login_attempts.pop(ip, None)
+        return 0
 
 
 # ========== HTTP Web 服务 ==========
@@ -389,9 +472,54 @@ _SETTING_KEYS = [
     'agg_enabled', 'agg_raw_days', 'agg_hourly_days', 'agg_daily_days'
 ]
 
+_SETTING_ALIASES = {
+    'username': 'auth_user',
+    'password': 'auth_pass',
+    'log_to_file': 'log_file',
+}
+_BODY_ERROR = object()
+
+
+def _public_settings():
+    settings = db_manager.get_all_settings()
+    settings.pop('auth_pass', None)
+    settings['username'] = settings.get('auth_user', '')
+    settings['log_to_file'] = settings.get('log_file', 0)
+    return settings
+
+
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    """Threading HTTP server with a hard cap on concurrent handlers."""
+
+    daemon_threads = True
+
+    def __init__(self, server_address, handler_class):
+        self._worker_slots = threading.BoundedSemaphore(MAX_HTTP_WORKERS)
+        super().__init__(server_address, handler_class)
+
+    def process_request(self, request, client_address):
+        if not self._worker_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._worker_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._worker_slots.release()
+
 
 class WebRequestHandler(BaseHTTPRequestHandler):
     """HTTP 请求处理器"""
+
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(HTTP_REQUEST_TIMEOUT)
 
     # 使用自定义 logger，关闭默认日志输出
     def log_message(self, format, *args):
@@ -414,6 +542,7 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
         self.end_headers()
         self.wfile.write(body)
 
@@ -422,16 +551,46 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
+        self.send_header(
+            'Content-Security-Policy',
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            "connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+        )
         self.end_headers()
         self.wfile.write(body)
 
     def _read_json_body(self):
         """读取并解析请求体 JSON，返回 dict 或 None"""
+        if self.headers.get('Transfer-Encoding'):
+            self.close_connection = True
+            self._send_json({'error': 'transfer encoding is not supported'}, 400)
+            return _BODY_ERROR
+        raw_length = self.headers.get('Content-Length')
         try:
-            content_length = int(self.headers.get('Content-Length', 0))
+            content_length = int(raw_length or 0)
         except (ValueError, TypeError):
-            content_length = 0
-        body = self.rfile.read(content_length) if content_length else b''
+            self.close_connection = True
+            self._send_json({'error': 'invalid content length'}, 400)
+            return _BODY_ERROR
+        if content_length < 0:
+            self.close_connection = True
+            self._send_json({'error': 'invalid content length'}, 400)
+            return _BODY_ERROR
+        if content_length > MAX_HTTP_BODY_BYTES:
+            self.close_connection = True
+            self._send_json({'error': 'request body too large'}, 413)
+            return _BODY_ERROR
+        try:
+            body = self.rfile.read(content_length) if content_length else b''
+        except (socket.timeout, TimeoutError):
+            self.close_connection = True
+            self._send_json({'error': 'request timeout'}, 408)
+            return _BODY_ERROR
+        if len(body) != content_length:
+            self.close_connection = True
+            self._send_json({'error': 'incomplete request body'}, 400)
+            return _BODY_ERROR
         if not body:
             return None
         try:
@@ -442,25 +601,32 @@ class WebRequestHandler(BaseHTTPRequestHandler):
     def _is_authorized(self):
         """鉴权：auth 关闭时放行；开启时校验 Bearer token"""
         if db_manager is None:
-            return True
+            return False
         try:
             if db_manager.get_setting('auth_enabled') != 1:
                 return True
         except Exception:
-            return True
+            return False
+        return self._has_valid_bearer_token()
+
+    def _has_valid_bearer_token(self):
         auth_header = self.headers.get('Authorization', '')
         if auth_header.startswith('Bearer '):
             token = auth_header[len('Bearer '):].strip()
             return is_valid_token(token)
         return False
 
+    def _is_admin_authorized(self):
+        """管理写操作始终要求 token，即使只读访问未启用认证。"""
+        return self._has_valid_bearer_token()
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
         query = parse_qs(parsed.query)
 
-        # 鉴权：除 /api/login（POST）外，所有路由均需校验
-        if not self._is_authorized():
+        # 首页和固定本地资源必须可加载，浏览器随后才能显示登录框。
+        if path.startswith('/api/') and not self._is_authorized():
             self._send_json({'error': 'unauthorized'}, 401)
             return
 
@@ -516,7 +682,7 @@ class WebRequestHandler(BaseHTTPRequestHandler):
                 self._send_json({'error': 'database not initialized'}, 503)
         elif path == '/api/settings':
             if db_manager:
-                self._send_json(db_manager.get_all_settings())
+                self._send_json(_public_settings())
             else:
                 self._send_json({'error': 'database not initialized'}, 503)
         elif path == '/api/engine':
@@ -545,7 +711,21 @@ class WebRequestHandler(BaseHTTPRequestHandler):
 
         # /api/login 无需鉴权
         if path == '/api/login':
+            client_ip = self.client_address[0] if self.client_address else 'unknown'
+            retry_after = _login_retry_after(client_ip)
+            if retry_after:
+                self.send_response(429)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Retry-After', str(retry_after))
+                body = json.dumps({'success': False, 'error': 'too many attempts'}).encode('utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.send_header('Cache-Control', 'no-store')
+                self.end_headers()
+                self.wfile.write(body)
+                return
             data = self._read_json_body()
+            if data is _BODY_ERROR:
+                return
             if not isinstance(data, dict):
                 self._send_json({'success': False}, 401)
                 return
@@ -553,18 +733,40 @@ class WebRequestHandler(BaseHTTPRequestHandler):
             password = data.get('password', '')
             auth_user = db_manager.get_setting('auth_user') if db_manager else ''
             auth_pass = db_manager.get_setting('auth_pass') if db_manager else ''
-            if auth_user != '' and username == auth_user and password == auth_pass:
+            valid = (
+                auth_user != '' and auth_pass != '' and
+                hmac.compare_digest(str(username), str(auth_user)) and
+                hmac.compare_digest(str(password), str(auth_pass))
+            )
+            if valid:
+                _record_login_result(client_ip, True)
                 token = generate_token(username, password)
-                add_token(token)
+                if not add_token(token):
+                    self._send_json({'success': False, 'error': 'authentication unavailable'}, 503)
+                    return
                 cleanup_tokens()
                 self._send_json({'token': token, 'success': True})
             else:
-                self._send_json({'success': False}, 401)
+                retry_after = _record_login_result(client_ip, False)
+                if retry_after:
+                    self.send_response(429)
+                    self.send_header('Content-Type', 'application/json; charset=utf-8')
+                    self.send_header('Retry-After', str(retry_after))
+                    body = json.dumps({'success': False, 'error': 'too many attempts'}).encode('utf-8')
+                    self.send_header('Content-Length', str(len(body)))
+                    self.send_header('Cache-Control', 'no-store')
+                    self.end_headers()
+                    self.wfile.write(body)
+                else:
+                    self._send_json({'success': False}, 401)
             return
 
         # 其余 POST 路由均需鉴权
-        if not self._is_authorized():
-            self._send_json({'error': 'unauthorized'}, 401)
+        if not self._is_admin_authorized():
+            self._send_json({
+                'error': 'admin authentication required',
+                'hint': 'set AUTH_USER and AUTH_PASS, then restart the container'
+            }, 403)
             return
 
         if path == '/api/settings':
@@ -572,18 +774,38 @@ class WebRequestHandler(BaseHTTPRequestHandler):
                 self._send_json({'error': 'database not initialized'}, 503)
                 return
             data = self._read_json_body()
+            if data is _BODY_ERROR:
+                return
             if not isinstance(data, dict):
                 self._send_json({'error': 'invalid json'}, 400)
                 return
             changed = []
-            for key in _SETTING_KEYS:
-                if key in data:
-                    db_manager.set_setting(key, data[key])
-                    changed.append(key)
+            normalized = {}
+            for input_key, value in data.items():
+                key = _SETTING_ALIASES.get(input_key, input_key)
+                if key in _SETTING_KEYS:
+                    if _SETTING_TYPES.get(key) is int:
+                        if isinstance(value, bool):
+                            value = 1 if value else 0
+                        else:
+                            try:
+                                value = int(value)
+                            except (TypeError, ValueError):
+                                self._send_json({'error': f'invalid value for {input_key}'}, 400)
+                                return
+                    normalized[key] = value
+            next_user = str(normalized.get('auth_user', db_manager.get_setting('auth_user')) or '')
+            next_pass = str(normalized.get('auth_pass', db_manager.get_setting('auth_pass')) or '')
+            if normalized.get('auth_enabled') == 1 and (not next_user or not next_pass):
+                self._send_json({'error': 'username and password are required to enable authentication'}, 400)
+                return
+            for key, value in normalized.items():
+                db_manager.set_setting(key, value)
+                changed.append(key)
             # 立即应用日志相关设置
             if 'log_level' in changed or 'log_file' in changed:
                 apply_log_settings()
-            self._send_json({'success': True, 'settings': db_manager.get_all_settings()})
+            self._send_json({'success': True, 'settings': _public_settings()})
             return
 
         if path == '/api/cleanup':
@@ -600,6 +822,8 @@ class WebRequestHandler(BaseHTTPRequestHandler):
                 self._send_json({'error': 'database not initialized'}, 503)
                 return
             data = self._read_json_body()
+            if data is _BODY_ERROR:
+                return
             if not isinstance(data, dict):
                 self._send_json({'error': 'invalid json'}, 400)
                 return
@@ -651,8 +875,7 @@ class WebRequestHandler(BaseHTTPRequestHandler):
 def start_web_server(port=WEB_PORT):
     """启动 HTTP Web 服务器（在独立线程中运行）"""
     try:
-        server = ThreadingHTTPServer(('0.0.0.0', port), WebRequestHandler)
-        server.daemon_threads = True
+        server = BoundedThreadingHTTPServer(('0.0.0.0', port), WebRequestHandler)
         print(f"[Web] Web server started on port {port}", flush=True)
         _log(f"Web server started on port {port}", 0)
         server.serve_forever()
@@ -699,6 +922,7 @@ class M1Server:
         self.clients = []  # 跟踪客户端线程
         self._conn_map = {}  # {client_ip: conn} 追踪活跃连接，用于同IP重连时关闭旧连接
         self._conn_lock = threading.Lock()
+        self._client_slots = threading.BoundedSemaphore(MAX_DEVICE_CLIENTS)
 
     def _register_conn(self, ip, conn):
         """注册连接，返回应被关闭的旧连接（如有）"""
@@ -714,13 +938,26 @@ class M1Server:
             if self._conn_map.get(ip) is conn:
                 del self._conn_map[ip]
 
+    def _wait_for_next_poll(self, ip, conn):
+        """Sleep interruptibly so a replacement connection can claim the slot."""
+        deadline = time.monotonic() + time_sleep
+        while self.running:
+            with self._conn_lock:
+                if self._conn_map.get(ip) is not conn:
+                    return False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return True
+            time.sleep(min(0.1, remaining))
+        return False
+
     def start(self):
         """启动服务器"""
         try:
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.server_socket.bind((self.host, self.port))
-            self.server_socket.listen(10)
+            self.server_socket.listen(MAX_DEVICE_CLIENTS)
             self.running = True
 
             _log(f"Socket server started on {self.host}:{self.port}", 0)
@@ -749,8 +986,14 @@ class M1Server:
                         except Exception:
                             pass
 
+                    if not self._client_slots.acquire(timeout=2):
+                        self._unregister_conn(client_ip, conn)
+                        conn.close()
+                        _log(f"Connection limit reached, rejected {addr}", 1)
+                        continue
+
                     client_thread = threading.Thread(
-                        target=self._handle_client,
+                        target=self._handle_client_with_slot,
                         args=(conn, addr),
                         daemon=True
                     )
@@ -768,11 +1011,16 @@ class M1Server:
         finally:
             self.stop()
 
+    def _handle_client_with_slot(self, conn, addr):
+        try:
+            self._handle_client(conn, addr)
+        finally:
+            self._client_slots.release()
+
     def _handle_client(self, conn, addr):
         """处理单个客户端连接"""
         _log(f"New connection from {addr}", 0)
         client_ip = addr[0] if isinstance(addr, tuple) else str(addr)
-        self._register_conn(client_ip, conn)
 
         conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         # 启用 TCP keepalive 参数，更快检测死连接（断网后 ~30s 内检测到）
@@ -812,15 +1060,14 @@ class M1Server:
                         break
 
                     # ---------- 阶段 3：接收剩余分片 ----------
-                    conn.settimeout(CHUNK_TIMEOUT)
-                    while True:
-                        try:
-                            chunk = conn.recv(BUFFER_SIZE)
-                            if not chunk:
-                                break
-                            data += chunk
-                        except socket.timeout:
-                            break
+                    data = recv_bounded_frame(
+                        conn,
+                        data,
+                        buffer_size=BUFFER_SIZE,
+                        chunk_timeout=CHUNK_TIMEOUT,
+                        max_frame_bytes=MAX_FRAME_BYTES,
+                        max_frame_seconds=MAX_FRAME_SECONDS,
+                    )
 
                 except socket.timeout:
                     consecutive_timeout += 1
@@ -850,6 +1097,9 @@ class M1Server:
                     break
                 except OSError as e:
                     _log(f"Client {addr} OS error on recv: {e}", 2)
+                    break
+                except FrameReadError as e:
+                    _log(f"Client {addr} invalid frame: {e}", 1)
                     break
 
                 # ---------- 阶段 4：解析与处理数据 ----------
@@ -884,7 +1134,8 @@ class M1Server:
                     conn.settimeout(None)  # sleep 期间不需要超时
                 except Exception:
                     pass
-                time.sleep(time_sleep)
+                if not self._wait_for_next_poll(client_ip, conn):
+                    break
 
         except Exception as e:
             _log(f"Client {addr} fatal error: {e}", 2)
@@ -987,54 +1238,35 @@ if __name__ == '__main__':
     print(f"===========================================", flush=True)
     _log(f"App version: {APP_VERSION}", 0)
 
-    # echarts 自动更新：优先 CDN，版本更新时覆盖本地
-    def check_update_echarts():
-        """尝试从 CDN 下载最新 echarts，若本地不存在或远端更新（hash 不同）则覆盖本地
-        返回：是否更新成功（即本地文件可用）
-        """
+    # 固定版本、固定哈希；已有合法文件不再在启动时漂移更新。
+    def ensure_echarts():
         os.makedirs(os.path.dirname(ECHARTS_FILE), exist_ok=True)
-        local_ok = os.path.isfile(ECHARTS_FILE) and os.path.getsize(ECHARTS_FILE) > 1024
-
+        if os.path.isfile(ECHARTS_FILE):
+            with open(ECHARTS_FILE, 'rb') as f:
+                local_hash = hashlib.sha256(f.read()).hexdigest()
+            if hmac.compare_digest(local_hash, ECHARTS_SHA256):
+                return True
         try:
-            import hashlib
             import urllib.request
             import ssl
-            # 5 秒超时，避免启动卡住
             req = urllib.request.Request(ECHARTS_CDN_URL)
             ctx = ssl.create_default_context()
             with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
-                remote_data = resp.read()
-
-            if not remote_data or len(remote_data) < 1024:
-                raise ValueError("CDN returned too small data")
-
+                remote_data = resp.read(2 * 1024 * 1024)
             remote_hash = hashlib.sha256(remote_data).hexdigest()
-
-            # 本地存在则比较 hash，hash 不同视为远端更新
-            if local_ok:
-                with open(ECHARTS_FILE, 'rb') as f:
-                    local_hash = hashlib.sha256(f.read()).hexdigest()
-                if local_hash == remote_hash:
-                    print(f"[echarts] CDN 版本与本地一致，跳过更新", flush=True)
-                    return True
-            # 写入本地（首次 / 更新）
+            if not hmac.compare_digest(remote_hash, ECHARTS_SHA256):
+                raise ValueError('echarts checksum mismatch')
             tmp = ECHARTS_FILE + '.tmp'
             with open(tmp, 'wb') as f:
                 f.write(remote_data)
             os.replace(tmp, ECHARTS_FILE)
-            _log(f"echarts updated from CDN ({len(remote_data)} bytes)", 0)
-            print(f"[echarts] 已从 CDN 同步最新版本 ({len(remote_data)} bytes)", flush=True)
+            _log(f"echarts {ECHARTS_VERSION} installed ({len(remote_data)} bytes)", 0)
             return True
         except Exception as e:
-            if local_ok:
-                _log(f"echarts CDN check failed ({e}), using local copy", 1)
-                print(f"[echarts] CDN 访问失败，使用本地缓存版本", flush=True)
-                return True
-            _log(f"echarts CDN check failed AND no local copy: {e}", 2)
-            print(f"[echarts] CDN 访问失败且无本地缓存：{e}", flush=True)
+            _log(f"echarts {ECHARTS_VERSION} unavailable: {e}", 2)
             return False
 
-    check_update_echarts()
+    ensure_echarts()
 
     # 初始化数据库（根据 engine.conf 确定引擎）
     _cur_engine, _cur_path = _resolve_engine_and_path()

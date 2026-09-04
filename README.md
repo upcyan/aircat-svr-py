@@ -101,6 +101,7 @@ docker logs -f aircat-server-lite
 services:
   aircat-server-lite:
     image: upcyan/aircat-server-lite:latest
+    pull_policy: always
     container_name: aircat-server-lite
     ports:
       - "9000:9000"
@@ -126,7 +127,7 @@ services:
 # 拉取镜像
 docker pull upcyan/aircat-server-web:latest
 
-# 运行容器（默认不启用认证）
+# 运行容器（建议设置管理认证）
 docker run -d \
   --name aircat-server-web \
   -p 9000:9000 \
@@ -136,6 +137,8 @@ docker run -d \
   -e LOG_FILE=false \
   -e DB_PATH=/data/aircat.db \
   -e WEB_PORT=8080 \
+  -e AUTH_USER=admin \
+  -e AUTH_PASS=请替换为强密码 \
   -v ./data:/data \
   --restart always \
   upcyan/aircat-server-web:latest
@@ -144,7 +147,7 @@ docker run -d \
 docker logs -f aircat-server-web
 ```
 
-首次启动时通过环境变量配置认证（可选）：
+通过环境变量配置或恢复管理认证：
 
 ```bash
 docker run -d \
@@ -175,6 +178,7 @@ docker exec -it aircat-server-web resetpasswd
 services:
   aircat-server-web:
     image: upcyan/aircat-server-web:latest
+    pull_policy: always
     container_name: aircat-server-web
     ports:
       - "9000:9000"
@@ -185,10 +189,8 @@ services:
       - LOG_FILE=false
       - DB_PATH=/data/aircat.db
       - WEB_PORT=8080
-      # 可选: 首次启动设置用户名（留空则不启用认证）
-      # - AUTH_USER=admin
-      # 可选: 首次启动设置密码（设置后自动启用认证）
-      # - AUTH_PASS=yourpassword
+      - AUTH_USER=admin
+      - AUTH_PASS=请替换为强密码
     volumes:
       - ./data:/data
     restart: always
@@ -248,6 +250,9 @@ python aircat-server-web.py
 |----------|--------|--------|------|
 | `LOG_LEVEL` | `DEBUG` | `DEBUG` / `INFO` / `WARNING` / `ERROR` | 控制台日志级别 |
 | `LOG_FILE` | `false` | `true` / `false` | 是否写入日志文件 |
+| `MAX_FRAME_BYTES` | `65536` | 正整数 | 单个 M1 响应帧最大字节数 |
+| `MAX_FRAME_SECONDS` | `10` | 正整数 | 单个 M1 响应帧总接收时限 |
+| `MAX_DEVICE_CLIENTS` | `32` | 正整数 | 最大并发设备连接数 |
 
 ### M1 设备亮度控制环境变量
 
@@ -271,10 +276,12 @@ python aircat-server-web.py
 | `DB_PATH` | `/data/aircat.db` | 数据库文件路径（sqlite 用 .db，duckdb 用 .duckdb） |
 | `DB_ENGINE` | `sqlite` | 存储引擎：`sqlite` / `duckdb`，首次启动后可在 Web 设置里切换 |
 | `WEB_PORT` | `8080` | Web 界面端口 |
-| `AUTH_USER` | （空） | 首次启动设置用户名，留空则不启用认证 |
-| `AUTH_PASS` | （空） | 首次启动设置密码，设置后自动启用认证 |
+| `AUTH_USER` | `admin`（仅设置密码时） | 设置管理用户名 |
+| `AUTH_PASS` | （空） | 设置后启用认证；也可修复已有数据库的无认证状态 |
+| `MAX_HTTP_BODY_BYTES` | `16384` | JSON 请求体最大字节数 |
+| `MAX_HTTP_WORKERS` | `16` | Web 请求最大并发处理数 |
 
-> `AUTH_USER` 和 `AUTH_PASS` 仅在首次启动时写入数据库，后续修改请通过 Web 设置面板或 `docker exec` 命令。
+> 管理写操作始终要求登录。未设置认证时仪表盘仍可只读访问；设置 `AUTH_PASS` 并重启可为首次或已有数据库启用认证。
 
 #### 存储引擎切换
 
@@ -353,6 +360,11 @@ CREATE TABLE sensor_data (
 
 - **支持架构**：amd64 / arm64
 - **自动构建**：每次推送到 main 分支自动构建两个镜像并递增版本号
+- **绿联 NAS 更新**：Compose 已设置 `pull_policy: always`；请在 UGOS Docker 项目“管理”中启用“更新检测”。发布镜像关闭 provenance 兼容旧版镜像摘要检测。
+
+## 断网恢复
+
+服务端监听 `0.0.0.0:9000`，WAN 断开不会停止本地监听；网络恢复后，终端重新建立 TCP 连接即可立即继续接受轮询。Web 版会关闭同一设备 IP 的旧半开连接，两个版本都启用了 keepalive、连接上限、完整帧上限和总接收时限。若终端仍显示 WiFi 叉号，请确认路由器的 DNS 劫持/静态解析在断网期间仍把原厂服务域名指向 NAS，并确保 NAS 使用固定局域网 IP；终端固件自身的重连周期无法由服务端强制改变。
 
 ## 端口说明
 

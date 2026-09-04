@@ -6,6 +6,7 @@ import json
 import re
 import logging
 import os
+from server_common import FrameReadError, recv_bounded_frame
 
 # ========== 配置区 ==========
 time_sleep = 5        # 采集间隔（秒）
@@ -15,6 +16,9 @@ RECV_TIMEOUT = 15     # 单次接收超时时间（秒），给 IoT 设备足够
 MAX_RETRY = 10        # 超时最大重试次数，IoT 设备低功耗/网络波动较频繁，放宽阈值
 SEND_TIMEOUT = 10     # 发送阶段超时时间（秒）
 CHUNK_TIMEOUT = 3     # 分片读取额外数据的超时（秒），缩短以避免阻塞主循环
+MAX_FRAME_BYTES = max(BUFFER_SIZE, int(os.environ.get('MAX_FRAME_BYTES', '65536')))
+MAX_FRAME_SECONDS = max(1, int(os.environ.get('MAX_FRAME_SECONDS', '10')))
+MAX_DEVICE_CLIENTS = max(1, int(os.environ.get('MAX_DEVICE_CLIENTS', '32')))
 
 # M1设备查询指令（保持原样）
 GET_MSG = b'\xaaO\x01%F\x119\x8f\x0b\x00\x00\x00\x00\x00\x00\x00\x00\xb0\xf8\x93\x11dR\x007\x00\x00\x02{"type":5,"status":1}\xff#END#'
@@ -123,6 +127,7 @@ class M1Server:
         self.server_socket = None
         self.running = False
         self.clients = []  # 跟踪客户端线程
+        self._client_slots = threading.BoundedSemaphore(MAX_DEVICE_CLIENTS)
     
     def start(self):
         """启动服务器"""
@@ -130,7 +135,7 @@ class M1Server:
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.server_socket.bind((self.host, self.port))
-            self.server_socket.listen(10)
+            self.server_socket.listen(MAX_DEVICE_CLIENTS)
             self.running = True
             
             _log(f"Server started on {self.host}:{self.port}", 0)
@@ -143,9 +148,14 @@ class M1Server:
                     
                     # 清理已结束的客户端线程，防止内存泄漏
                     self.clients = [t for t in self.clients if t.is_alive()]
+
+                    if not self._client_slots.acquire(blocking=False):
+                        conn.close()
+                        _log(f"Connection limit reached, rejected {addr}", 1)
+                        continue
                     
                     client_thread = threading.Thread(
-                        target=self._handle_client,
+                        target=self._handle_client_with_slot,
                         args=(conn, addr),
                         daemon=True
                     )
@@ -163,6 +173,12 @@ class M1Server:
         finally:
             self.stop()
     
+    def _handle_client_with_slot(self, conn, addr):
+        try:
+            self._handle_client(conn, addr)
+        finally:
+            self._client_slots.release()
+
     def _handle_client(self, conn, addr):
         """处理单个客户端连接"""
         _log(f"New connection from {addr}", 0)
@@ -210,15 +226,14 @@ class M1Server:
                         break
 
                     # ---------- 阶段 3：接收剩余分片 ----------
-                    conn.settimeout(CHUNK_TIMEOUT)
-                    while True:
-                        try:
-                            chunk = conn.recv(BUFFER_SIZE)
-                            if not chunk:
-                                break
-                            data += chunk
-                        except socket.timeout:
-                            break
+                    data = recv_bounded_frame(
+                        conn,
+                        data,
+                        buffer_size=BUFFER_SIZE,
+                        chunk_timeout=CHUNK_TIMEOUT,
+                        max_frame_bytes=MAX_FRAME_BYTES,
+                        max_frame_seconds=MAX_FRAME_SECONDS,
+                    )
 
                 except socket.timeout:
                     consecutive_timeout += 1
@@ -248,6 +263,9 @@ class M1Server:
                     break
                 except OSError as e:
                     _log(f"Client {addr} OS error on recv: {e}", 2)
+                    break
+                except FrameReadError as e:
+                    _log(f"Client {addr} invalid frame: {e}", 1)
                     break
 
                 # ---------- 阶段 4：解析与处理数据 ----------

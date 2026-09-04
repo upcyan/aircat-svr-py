@@ -1,6 +1,7 @@
 services:
   aircat-server-lite:
     image: upcyan/aircat-server-lite:latest
+    pull_policy: always
     container_name: aircat-server-lite
     ports:
       - "9000:9000"

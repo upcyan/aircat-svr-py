@@ -122,12 +122,12 @@ class BaseStorage:
             first_start = self._fetchone_dict(cur)['c'] == 0
 
             defaults = dict(SETTING_DEFAULTS)
+            auth_user_env = os.environ.get('AUTH_USER')
+            auth_pass_env = os.environ.get('AUTH_PASS')
             if first_start:
-                auth_user_env = os.environ.get('AUTH_USER')
-                auth_pass_env = os.environ.get('AUTH_PASS')
                 if auth_user_env is not None:
                     defaults['auth_user'] = auth_user_env
-                if auth_pass_env is not None:
+                if auth_pass_env:
                     defaults['auth_pass'] = auth_pass_env
                     defaults['auth_enabled'] = 1
                 m1_brightness_env = os.environ.get('M1_BRIGHTNESS')
@@ -144,6 +144,27 @@ class BaseStorage:
                         'INSERT INTO settings (key, value) VALUES (?, ?)',
                         (key, str(value))
                     )
+
+            # AUTH_PASS is also a recovery/bootstrap path for an existing
+            # unauthenticated database. Once authentication is active, Web
+            # settings remain authoritative and are not overwritten on restart.
+            cur = self.conn.execute("SELECT value FROM settings WHERE key='auth_enabled'")
+            auth_row = self._fetchone_dict(cur)
+            if auth_pass_env and (auth_row is None or str(auth_row['value']) != '1'):
+                self.conn.execute(
+                    "INSERT INTO settings (key, value) VALUES ('auth_user', ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (auth_user_env or 'admin',)
+                )
+                self.conn.execute(
+                    "INSERT INTO settings (key, value) VALUES ('auth_pass', ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (auth_pass_env,)
+                )
+                self.conn.execute(
+                    "INSERT INTO settings (key, value) VALUES ('auth_enabled', '1') "
+                    "ON CONFLICT(key) DO UPDATE SET value='1'"
+                )
             self.conn.commit()
 
     # ---------- 设置读写 ----------

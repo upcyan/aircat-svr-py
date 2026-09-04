@@ -1,6 +1,7 @@
 services:
   aircat-server-web:
     image: upcyan/aircat-server-web:latest
+    pull_policy: always
     container_name: aircat-server-web
     ports:
       - "9000:9000"
@@ -17,9 +18,9 @@ services:
       - WEB_PORT=8080
       # 存储引擎: sqlite / duckdb, 默认 sqlite（首次启动后可在 Web 设置里切换）
       - DB_ENGINE=sqlite
-      # 可选: 首次启动设置用户名（留空则不启用认证）
+      # 管理写操作必须认证；已有无认证数据库也可用以下变量安全启用
       # - AUTH_USER=admin
-      # 可选: 首次启动设置密码（设置后自动启用认证）
+      # 设置密码后自动启用认证
       # - AUTH_PASS=yourpassword
       # 可选: 首次启动设置 M1 亮度（-1=不控制, 0=息屏, 25/50/75/100=亮度）
       # - M1_BRIGHTNESS=-1
