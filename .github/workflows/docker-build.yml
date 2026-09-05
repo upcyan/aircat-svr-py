@@ -51,6 +51,8 @@ jobs:
           context: .
           file: ./lite.Dockerfile
           push: true
+          # Disabling attestations alone does not force Docker manifest media types.
+          outputs: type=image,oci-mediatypes=false,compression=gzip,force-compression=true
           pull: true
           provenance: false
           sbom: false
@@ -75,6 +77,7 @@ jobs:
           context: .
           file: ./web.Dockerfile
           push: true
+          outputs: type=image,oci-mediatypes=false,compression=gzip,force-compression=true
           pull: true
           provenance: false
           sbom: false
@@ -92,6 +95,33 @@ jobs:
             ${{ secrets.DOCKER_USERNAME }}/aircat-server-web:latest
             ${{ secrets.DOCKER_USERNAME }}/aircat-server-web:${{ steps.version.outputs.current_version }}
             ${{ secrets.DOCKER_USERNAME }}/aircat-server-web:sha-${{ github.sha }}
+
+      - name: Verify published Docker manifest compatibility
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          IMAGE_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for variant in lite web; do
+            image="$DOCKER_USERNAME/aircat-server-$variant"
+            # Inspect the immutable build tag so another run cannot change the target.
+            manifest=$(docker buildx imagetools inspect "$image:sha-$IMAGE_REVISION" --raw)
+            echo "$manifest" | jq -e '
+              .schemaVersion == 2 and
+              .mediaType == "application/vnd.docker.distribution.manifest.list.v2+json" and
+              (.manifests | length == 2) and
+              ([.manifests[].platform | "\(.os)/\(.architecture)"] | sort == ["linux/amd64", "linux/arm64"]) and
+              all(.manifests[]; .mediaType == "application/vnd.docker.distribution.manifest.v2+json")
+            '
+            for digest in $(echo "$manifest" | jq -r '.manifests[].digest'); do
+              docker buildx imagetools inspect "$image@$digest" --raw | jq -e '
+                .schemaVersion == 2 and
+                .mediaType == "application/vnd.docker.distribution.manifest.v2+json" and
+                .config.mediaType == "application/vnd.docker.container.image.v1+json" and
+                all(.layers[]; .mediaType == "application/vnd.docker.image.rootfs.diff.tar.gzip")
+              '
+            done
+          done
 
       - name: Increment version
         run: |

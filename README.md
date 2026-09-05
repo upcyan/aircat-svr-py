@@ -360,7 +360,23 @@ CREATE TABLE sensor_data (
 
 - **支持架构**：amd64 / arm64
 - **自动构建**：每次推送到 main 分支自动构建两个镜像并递增版本号
-- **绿联 NAS 更新**：Compose 已设置 `pull_policy: always`；请在 UGOS Docker 项目“管理”中启用“更新检测”。发布镜像关闭 provenance 兼容旧版镜像摘要检测。
+- **绿联 NAS 更新**：请启用 UGOS Docker 的“更新检测”，并使用 `:latest` 标签跟随更新。Compose 的 `pull_policy: always` 仅影响部署时拉取镜像，不会开启 NAS 的后台更新检测。版本标签和 `sha-...` 标签用于固定版本，不会跟随 `latest` 更新。
+- **镜像格式兼容**：发布时显式使用 Docker Schema 2 清单 / manifest list 和 gzip 层，关闭 provenance、SBOM，并在发布后校验两个架构的实际清单。仅关闭 provenance 仍可能输出 OCI index，不能保证旧版 NAS 检测器兼容；多架构支持保持不变。
+
+### 绿联 NAS 仍未提示更新时
+
+此修复需推送到 `main` 并等待 GitHub Actions 成功发布新镜像后才生效，本地修改不会改变 Docker Hub 上的镜像。
+
+1. 确认容器使用 `upcyan/aircat-server-web:latest` 或 `upcyan/aircat-server-lite:latest`，没有固定版本号或 `@sha256:...` 摘要。
+2. 在 UGOS 中手动拉取该镜像并重新创建容器（保留原来的端口、环境变量和数据目录挂载）。仅重启容器不会切换到新镜像。
+3. 若使用仓库提供的 Compose 文件，可在对应项目目录执行下面的命令；轻量版将服务名改为 `aircat-server-lite`。不要删除数据目录或卷。
+
+   ```sh
+   docker compose pull aircat-server-web
+   docker compose up -d aircat-server-web
+   ```
+
+4. 若拉取失败，先检查 NAS 到 Docker Hub 的连接、认证及限流；使用镜像代理时还需检查代理缓存是否同步。若可以拉取到新镜像却没有更新提示，请记录 UGOS / Docker 应用版本、完整镜像标签和检测日志，进一步确认检测器兼容性。
 
 ## 断网恢复
 

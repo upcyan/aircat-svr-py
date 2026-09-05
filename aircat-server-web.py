@@ -10,6 +10,7 @@ import sqlite3
 import hashlib
 import hmac
 import secrets
+from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 from server_common import FrameReadError, recv_bounded_frame
@@ -47,7 +48,7 @@ LOGIN_LOCKOUT_SECONDS = max(1, int(os.environ.get('LOGIN_LOCKOUT_SECONDS', '60')
 
 # ---------- 读取容器版本号 ----------
 def _read_version():
-    """读取版本号：优先 VERSION 环境变量 → 同目录 VERSION 文件 → 'dev'"""
+    """读取版本号：优先 APP_VERSION 环境变量 → 同目录 VERSION 文件 → 'dev'"""
     env_v = os.environ.get('APP_VERSION', '').strip()
     if env_v:
         return env_v
@@ -457,7 +458,7 @@ def _record_login_result(client_ip, success):
 _INDEX_HTML = None
 try:
     with open(TEMPLATE_FILE, 'r', encoding='utf-8') as f:
-        _INDEX_HTML = f.read()
+        _INDEX_HTML = f.read().replace('{{APP_VERSION}}', escape(APP_VERSION))
     _log(f"Loaded template {TEMPLATE_FILE}", 3)
 except Exception as e:
     _log(f"Failed to load template {TEMPLATE_FILE}: {e}", 1)
@@ -1022,22 +1023,27 @@ class M1Server:
         _log(f"New connection from {addr}", 0)
         client_ip = addr[0] if isinstance(addr, tuple) else str(addr)
 
-        conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-        # 启用 TCP keepalive 参数，更快检测死连接（断网后 ~30s 内检测到）
-        try:
-            if hasattr(socket, 'TCP_KEEPIDLE'):
-                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 15)   # 15s 空闲开始探测
-            if hasattr(socket, 'TCP_KEEPINTVL'):
-                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 5)  # 每 5s 探测一次
-            if hasattr(socket, 'TCP_KEEPCNT'):
-                conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)    # 3 次失败判定断开
-        except Exception:
-            pass
-
         consecutive_timeout = 0
         total_data_count = 0
 
         try:
+            # A reconnect may close this socket before its worker starts.
+            try:
+                conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                # 启用 TCP keepalive 参数，更快检测死连接（断网后 ~30s 内检测到）
+                try:
+                    if hasattr(socket, 'TCP_KEEPIDLE'):
+                        conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 15)   # 15s 空闲开始探测
+                    if hasattr(socket, 'TCP_KEEPINTVL'):
+                        conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 5)  # 每 5s 探测一次
+                    if hasattr(socket, 'TCP_KEEPCNT'):
+                        conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)    # 3 次失败判定断开
+                except Exception:
+                    pass
+            except OSError as e:
+                _log(f"Client {addr} closed during setup: {e}", 3)
+                return
+
             while self.running:
                 # ---------- 阶段 1：发送查询指令 ----------
                 try:

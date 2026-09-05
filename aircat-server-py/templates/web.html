@@ -190,30 +190,33 @@
         }
 
         .card-icon {
-            width: 36px;
-            height: 36px;
-            border-radius: 10px;
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
             display: flex;
             align-items: center;
             justify-content: center;
-            background: var(--accent-dim);
+            color: var(--metric-color, var(--accent));
+            background: linear-gradient(145deg, rgba(var(--metric-rgb), 0.20), rgba(var(--metric-rgb), 0.06));
+            border: 1px solid rgba(var(--metric-rgb), 0.24);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
             flex-shrink: 0;
         }
 
         .card-icon svg {
-            width: 20px;
-            height: 20px;
-            fill: var(--accent);
+            width: 24px;
+            height: 24px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 1.75;
+            stroke-linecap: round;
+            stroke-linejoin: round;
         }
 
-        .card.humidity .card-icon { background: rgba(66, 165, 245, 0.15); }
-        .card.humidity .card-icon svg { fill: var(--humidity); }
-        .card.temperature .card-icon { background: rgba(255, 112, 67, 0.15); }
-        .card.temperature .card-icon svg { fill: var(--temperature); }
-        .card.pm25 .card-icon { background: rgba(171, 71, 188, 0.15); }
-        .card.pm25 .card-icon svg { fill: var(--pm25); color: var(--pm25); stroke: var(--pm25); }
-        .card.hcho .card-icon { background: rgba(0, 230, 118, 0.15); }
-        .card.hcho .card-icon svg { fill: var(--hcho); color: var(--hcho); stroke: var(--hcho); }
+        .card.humidity .card-icon { --metric-color: var(--humidity); --metric-rgb: 66, 165, 245; }
+        .card.temperature .card-icon { --metric-color: var(--temperature); --metric-rgb: 255, 112, 67; }
+        .card.pm25 .card-icon { --metric-color: var(--pm25); --metric-rgb: 171, 71, 188; }
+        .card.hcho .card-icon { --metric-color: var(--hcho); --metric-rgb: 0, 230, 118; }
 
         .card-value {
             display: flex;
@@ -992,7 +995,7 @@
             <div class="card humidity">
                 <div class="card-top">
                     <div class="card-icon">
-                        <svg viewBox="0 0 24 24"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/></svg>
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3s-6.5 7-6.5 11a6.5 6.5 0 0 0 13 0C18.5 10 12 3 12 3Z"/><path d="M8.5 14.5a3.5 3.5 0 0 0 3.5 3.5" opacity="0.65"/></svg>
                     </div>
                     <span class="card-name">湿度</span>
                 </div>
@@ -1005,7 +1008,7 @@
             <div class="card temperature">
                 <div class="card-top">
                     <div class="card-icon">
-                        <svg viewBox="0 0 24 24"><path d="M15 13V5a3 3 0 0 0-6 0v8a5 5 0 1 0 6 0zm-6-8a1 1 0 0 1 2 0v8.59l.71.7a3 3 0 1 1-4.24 0l.7-.7V5z"/></svg>
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 13.5V5a3 3 0 0 1 6 0v8.5a4.5 4.5 0 1 1-6 0Z"/><path d="M12 8v8"/><circle cx="12" cy="17" r="1.5" fill="currentColor" stroke="none"/><path d="M18 6h2M18 10h1.5" opacity="0.65"/></svg>
                     </div>
                     <span class="card-name">温度</span>
                 </div>
@@ -1018,7 +1021,7 @@
             <div class="card pm25">
                 <div class="card-top">
                     <div class="card-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10a3 3 0 1 0-2.5-3"/><path d="M3 12h13a3 3 0 1 1-2.5 3"/><path d="M3 16h7a2.5 2.5 0 1 0-2 2.5"/><circle cx="18" cy="6.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="20.5" cy="10.5" r="0.9" fill="currentColor" stroke="none"/><circle cx="19" cy="14.5" r="1.1" fill="currentColor" stroke="none"/></svg>
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 8h9a2.5 2.5 0 1 0-2.5-2.5M3 12h15M3 16h7a2.5 2.5 0 1 1-2.5 2.5"/><circle cx="18" cy="5" r="1" fill="currentColor" stroke="none"/><circle cx="21" cy="9" r="1.25" fill="currentColor" stroke="none"/><circle cx="17" cy="18" r="1.5" opacity="0.65"/><circle cx="21" cy="15" r="0.75" fill="currentColor" stroke="none"/></svg>
                     </div>
                     <span class="card-name">PM2.5</span>
                 </div>
@@ -1031,7 +1034,7 @@
             <div class="card hcho">
                 <div class="card-top">
                     <div class="card-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="5.8" y1="13" x2="9.2" y2="13"/><line x1="14.8" y1="13" x2="18.2" y2="13"/><line x1="12" y1="7.2" x2="12" y2="10.8"/><circle cx="12" cy="13" r="2.8" fill="currentColor" stroke="none"/><circle cx="4" cy="13" r="1.8" fill="currentColor" stroke="none"/><circle cx="20" cy="13" r="1.8" fill="currentColor" stroke="none"/><circle cx="12" cy="5" r="2.2" fill="currentColor" stroke="none"/></svg>
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10.5 7.5v3M13.5 7.5v3M9.5 15l-3 2M14.5 15l3 2" opacity="0.65"/><circle cx="12" cy="5" r="2.5"/><circle cx="12" cy="13.5" r="3"/><circle cx="4.5" cy="18.5" r="2.5"/><circle cx="19.5" cy="18.5" r="2.5"/></svg>
                     </div>
                     <span class="card-name">甲醛</span>
                 </div>
@@ -1072,7 +1075,7 @@
             <div id="chart"></div>
         </div>
 
-        <div class="footer">Phicomm M1 · 数据每 5 秒刷新，图表每 60 秒刷新</div>
+        <div class="footer">Phicomm M1 · <span id="app-version">v{{APP_VERSION}}</span> · 数据每 5 秒刷新，图表每 60 秒刷新</div>
     </div>
 
     <!-- 设置弹窗 -->

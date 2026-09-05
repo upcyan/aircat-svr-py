@@ -323,5 +323,29 @@ class ReconnectTests(unittest.TestCase):
         self.assert_reconnects(load_server_module('aircat_lite_reconnect', 'aircat-server-lite.py'))
 
 
+class ConnectionSetupRaceTests(unittest.TestCase):
+    def test_closed_socket_before_worker_starts_preserves_replacement_and_slot(self):
+        module = load_web_module()
+        server = module.M1Server()
+        old = socket.socket()
+        replacement = socket.socket()
+        ip = '127.0.0.1'
+        try:
+            server._register_conn(ip, old)
+            server._register_conn(ip, replacement)
+            old.close()  # Reproduce accept-loop replacement before worker startup.
+            server._client_slots = threading.BoundedSemaphore(1)
+            self.assertTrue(server._client_slots.acquire(blocking=False))
+            with mock.patch.object(module, '_log') as log:
+                server._handle_client_with_slot(old, (ip, 12345))
+            self.assertIs(server._conn_map[ip], replacement)
+            self.assertTrue(server._client_slots.acquire(blocking=False))
+            self.assertTrue(any('closed during setup' in call.args[0] for call in log.call_args_list))
+            self.assertTrue(any('Connection closed:' in call.args[0] for call in log.call_args_list))
+        finally:
+            old.close()
+            replacement.close()
+
+
 if __name__ == '__main__':
     unittest.main()
