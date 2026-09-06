@@ -668,6 +668,9 @@
             gap: 8px;
         }
 
+        #settings-overlay .modal-footer { flex-wrap: wrap; }
+        #settings-msg { flex: 1 0 100%; box-sizing: border-box; }
+
         .msg.show { display: flex; }
 
         .msg-success {
@@ -1034,7 +1037,7 @@
             <div class="card hcho">
                 <div class="card-top">
                     <div class="card-icon">
-                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10.5 7.5v3M13.5 7.5v3M9.5 15l-3 2M14.5 15l3 2" opacity="0.65"/><circle cx="12" cy="5" r="2.5"/><circle cx="12" cy="13.5" r="3"/><circle cx="4.5" cy="18.5" r="2.5"/><circle cx="19.5" cy="18.5" r="2.5"/></svg>
+                        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7.5 9.5 10 8m4 0 2.5 1.5M12 12v4" opacity="0.65"/><circle cx="12" cy="6" r="3"/><circle cx="5" cy="11" r="2.5"/><circle cx="19" cy="11" r="2.5"/><circle cx="12" cy="19" r="2.5"/><circle cx="12" cy="6" r="1" fill="currentColor" stroke="none" opacity="0.4"/></svg>
                     </div>
                     <span class="card-name">甲醛</span>
                 </div>
@@ -1210,8 +1213,9 @@
                     </div>
                     <label class="checkbox-field">
                         <input type="checkbox" id="setting-m1-timer-enabled">
-                        <span>定时开关屏</span>
+                        <span>定时开关屏（开启后优先使用时段亮度）</span>
                     </label>
+                    <p class="hint">保存后在设备下一次返回数据时发送亮度指令；请观察设备屏幕确认效果。定时使用服务器时区。</p>
                     <div class="timer-fields" id="timer-fields">
                         <div class="field">
                             <label for="setting-m1-timer-day-brightness">白天亮度</label>
@@ -1248,9 +1252,9 @@
                     </div>
                 </div>
 
-                <div class="msg" id="settings-msg"></div>
             </div>
             <div class="modal-footer">
+                <div class="msg" id="settings-msg" role="status" aria-live="polite" aria-atomic="true"></div>
                 <button class="btn btn-secondary" id="settings-cancel">取消</button>
                 <button class="btn btn-primary" id="settings-save">保存设置</button>
             </div>
@@ -1488,11 +1492,7 @@
                 settingsMsg.textContent = text;
                 settingsMsg.classList.remove("show", "msg-success", "msg-error");
                 settingsMsg.classList.add("show", type === "error" ? "msg-error" : "msg-success");
-                if (type !== "error") {
-                    setTimeout(function () {
-                        settingsMsg.classList.remove("show");
-                    }, 2500);
-                }
+
             }
 
             function hideSettingsMsg() {
@@ -1511,6 +1511,7 @@
             // 定时开关屏：显示/隐藏定时字段
             function toggleTimerFields() {
                 var enabled = document.getElementById("setting-m1-timer-enabled").checked;
+                document.getElementById("setting-m1-brightness").disabled = enabled;
                 var fields = document.getElementById("timer-fields");
                 if (fields) {
                     fields.style.display = enabled ? "block" : "none";
@@ -1623,12 +1624,14 @@
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload)
                 }).then(function (d) {
-                    showSettingsMsg("设置已保存", "success");
+                    if (!d || d.success !== true) { throw new Error("服务器未确认保存成功"); }
+                    showSettingsMsg("✓ 设置已保存", "success");
                     document.getElementById("set-password").value = "";
                 }).catch(function (err) {
                     if (err && err.status !== 401) {
                         var m = "保存失败";
-                        if (err && err.body && err.body.message) { m = err.body.message; }
+                        if (err && err.body) { m = err.body.message || err.body.error || m; }
+                        else if (err && err.message) { m = err.message; }
                         showSettingsMsg(m, "error");
                     }
                 }).finally(function () {
@@ -1682,7 +1685,8 @@
                     }).catch(function (err) {
                         if (err && err.status !== 401) {
                             var m = "清理失败";
-                            if (err && err.body && err.body.message) { m = err.body.message; }
+                            if (err && err.body) { m = err.body.message || err.body.error || m; }
+                        else if (err && err.message) { m = err.message; }
                             showSettingsMsg(m, "error");
                         }
                     }).finally(function () {

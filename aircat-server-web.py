@@ -795,6 +795,25 @@ class WebRequestHandler(BaseHTTPRequestHandler):
                                 self._send_json({'error': f'invalid value for {input_key}'}, 400)
                                 return
                     normalized[key] = value
+            try:
+                for key in ('m1_brightness', 'm1_timer_day_brightness', 'm1_timer_night_brightness'):
+                    if key in normalized:
+                        if str(normalized[key]) not in ('-1', '0', '25', '50', '75', '100'):
+                            raise ValueError('亮度必须为不控制、0%、25%、50%、75% 或 100%')
+                        normalized[key] = int(normalized[key])
+                for key in ('m1_timer_day_start', 'm1_timer_night_start'):
+                    if key in normalized and not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d', str(normalized[key])):
+                        raise ValueError('请输入有效的定时时间（HH:MM）')
+                if 'm1_timer_enabled' in normalized and normalized['m1_timer_enabled'] not in (0, 1):
+                    raise ValueError('定时开关值无效')
+                if normalized.get('m1_timer_enabled', db_manager.get_setting('m1_timer_enabled')) == 1:
+                    day = normalized.get('m1_timer_day_start', db_manager.get_setting('m1_timer_day_start'))
+                    night = normalized.get('m1_timer_night_start', db_manager.get_setting('m1_timer_night_start'))
+                    if day == night:
+                        raise ValueError('白天和夜晚的开始时间不能相同')
+            except ValueError as e:
+                self._send_json({'error': str(e)}, 400)
+                return
             next_user = str(normalized.get('auth_user', db_manager.get_setting('auth_user')) or '')
             next_pass = str(normalized.get('auth_pass', db_manager.get_setting('auth_pass')) or '')
             if normalized.get('auth_enabled') == 1 and (not next_user or not next_pass):
@@ -887,29 +906,42 @@ def start_web_server(port=WEB_PORT):
 
 # ========== Socket服务 ==========
 def get_current_brightness(db):
-    """根据设置获取当前亮度"""
-    m1_brightness = db.get_setting('m1_brightness')
-    if m1_brightness is not None and int(m1_brightness) >= 0:
-        return int(m1_brightness)
+    """定时启用时优先使用时段亮度，否则使用手动亮度。"""
+    def setting(key, default):
+        value = db.get_setting(key)
+        return default if value is None or value == '' else value
 
-    timer_enabled = db.get_setting('m1_timer_enabled')
-    if not timer_enabled:
-        return -1
+    if str(setting('m1_timer_enabled', 0)).lower() not in ('1', 'true'):
+        return int(setting('m1_brightness', -1))
 
     now = time.localtime()
-    current_time = now.tm_hour * 60 + now.tm_min
+    current = now.tm_hour * 60 + now.tm_min
 
-    def parse_time(t_str):
-        h, m = t_str.split(':')
-        return int(h) * 60 + int(m)
+    def minutes(value):
+        h, m = map(int, value.split(':'))
+        if not (0 <= h < 24 and 0 <= m < 60):
+            raise ValueError('invalid brightness schedule time')
+        return h * 60 + m
 
-    day_start = parse_time(db.get_setting('m1_timer_day_start') or '07:00')
-    night_start = parse_time(db.get_setting('m1_timer_night_start') or '23:00')
+    day = minutes(setting('m1_timer_day_start', '07:00'))
+    night = minutes(setting('m1_timer_night_start', '23:00'))
+    if day == night:
+        raise ValueError('brightness schedule times must differ')
+    is_day = day <= current < night if day < night else current >= day or current < night
+    return int(setting('m1_timer_day_brightness', 100) if is_day
+               else setting('m1_timer_night_brightness', 0))
 
-    if day_start <= current_time < night_start:
-        return int(db.get_setting('m1_timer_day_brightness') or 100)
-    else:
-        return int(db.get_setting('m1_timer_night_brightness') or 0)
+
+def build_brightness_message(device_frame, brightness):
+    """Use the reporting device's header; length covers padding, type and JSON."""
+    if brightness not in (0, 25, 50, 75, 100):
+        raise ValueError('invalid brightness')
+    if len(device_frame) < 34 or device_frame[0] != 0xaa:
+        raise ValueError('invalid device frame header')
+    payload = json.dumps({'brightness': str(brightness), 'type': 2},
+                         separators=(',', ':')).encode('utf-8')
+    return (device_frame[:24] + bytes([len(payload) + 3, 0, 0, 2])
+            + payload + b'\xff#END#')
 
 
 class M1Server:
@@ -1117,21 +1149,17 @@ class M1Server:
                     self._process_data(json_data, addr)
                     total_data_count += 1
 
-                    # 亮度控制
+                    # 设备在线并返回数据后下发；sendall 成功不代表设备确认执行。
                     if db_manager:
-                        brightness = get_current_brightness(db_manager)
-                        if brightness >= 0:
-                            try:
+                        try:
+                            brightness = get_current_brightness(db_manager)
+                            if brightness >= 0:
                                 conn.settimeout(SEND_TIMEOUT)
-                                brightness_json = json.dumps({"brightness": brightness}, separators=(',', ':'))
-                                json_bytes = brightness_json.encode('utf-8')
-                                # GET_MSG 结构：[0:23]固定包头 + [23]0x00 + [24]消息长度 + [25:27]0x0000 + [27]0x02 + JSON + 0xff + #END#
-                                length_byte = len(json_bytes) + 6  # marker(5) + json + 0xff(1)
-                                brightness_msg = GET_MSG[:23] + bytes([0x00, length_byte, 0x00, 0x00, 0x02]) + json_bytes + b'\xff#END#'
-                                conn.sendall(brightness_msg)
-                                _log(f"Sent brightness control: {brightness} to {addr}", 3)
-                            except Exception as e:
-                                _log(f"Brightness control error: {e}", 1)
+                                conn.sendall(build_brightness_message(data, brightness))
+                                _log(f"Brightness command sent: {brightness} to {addr} (not acknowledged)", 3)
+                        except (OSError, ValueError, TypeError) as e:
+                            _log(f"Brightness control error: {e}", 1)
+
                 else:
                     _log(f"Client {addr} received data but no valid JSON (len={len(data)})", 1)
 

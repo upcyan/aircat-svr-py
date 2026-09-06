@@ -184,6 +184,9 @@ class HttpIntegrationTests(unittest.TestCase):
             def get_all_settings(self):
                 return dict(self.values)
 
+            def set_setting(self, key, value):
+                self.values[key] = value
+
             def clear_all_data(self):
                 return 3
 
@@ -212,6 +215,24 @@ class HttpIntegrationTests(unittest.TestCase):
         payload = response.read()
         conn.close()
         return response.status, dict(response.headers), payload
+
+    def test_brightness_settings_validate_before_saving(self):
+        token = self.web.generate_token()
+        self.web.add_token(token)
+        headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+        for invalid in ({'m1_brightness': 101}, {'m1_timer_day_start': '25:00'},
+                        {'m1_timer_enabled': 1, 'm1_timer_day_start': '07:00',
+                         'm1_timer_night_start': '07:00'}):
+            original = dict(self.fake_db.values)
+            status, _, _ = self.request('POST', '/api/settings', json.dumps(invalid), headers)
+            self.assertEqual(status, 400)
+            self.assertEqual(self.fake_db.values, original)
+        valid = {'m1_timer_enabled': 1, 'm1_timer_day_start': '22:00',
+                 'm1_timer_night_start': '07:00', 'm1_timer_day_brightness': 0}
+        status, _, body = self.request('POST', '/api/settings', json.dumps(valid), headers)
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)['success'])
+        self.assertEqual(self.fake_db.get_setting('m1_timer_day_brightness'), 0)
 
     def test_login_shell_and_admin_boundary(self):
         status, _, _ = self.request('GET', '/')
@@ -321,6 +342,50 @@ class ReconnectTests(unittest.TestCase):
 
     def test_lite_server_accepts_device_after_disconnect(self):
         self.assert_reconnects(load_server_module('aircat_lite_reconnect', 'aircat-server-lite.py'))
+
+
+class BrightnessTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.module = load_web_module()
+
+    def brightness(self, hour, minute=0, **settings):
+        db = mock.Mock()
+        db.get_setting.side_effect = settings.get
+        now = mock.Mock(tm_hour=hour, tm_min=minute)
+        with mock.patch.object(self.module.time, 'localtime', return_value=now):
+            return self.module.get_current_brightness(db)
+
+    def test_manual_and_disabled(self):
+        self.assertEqual(self.brightness(12, m1_brightness='0', m1_timer_enabled=0), 0)
+        self.assertEqual(self.brightness(12, m1_timer_enabled='0'), -1)
+
+    def test_timer_overrides_manual_and_preserves_zero(self):
+        self.assertEqual(self.brightness(12, m1_brightness='25', m1_timer_enabled=1,
+                                        m1_timer_day_brightness=0), 0)
+
+    def test_schedule_boundaries_and_midnight(self):
+        settings = dict(m1_timer_enabled=1, m1_timer_day_start='22:00',
+                        m1_timer_night_start='07:00', m1_timer_day_brightness=50,
+                        m1_timer_night_brightness=-1)
+        for hour, expected in ((22, 50), (0, 50), (6, 50), (7, -1), (21, -1)):
+            with self.subTest(hour=hour):
+                self.assertEqual(self.brightness(hour, **settings), expected)
+
+    def test_control_protocol_uses_device_header_and_correct_length(self):
+        frame = bytes(range(24)) + bytes(10)
+        frame = b'\xaa' + frame[1:]
+        for level in (0, 25, 50, 75, 100):
+            packet = self.module.build_brightness_message(frame, level)
+            self.assertEqual(packet[:24], frame[:24])
+            self.assertEqual(packet[25:28], b'\x00\x00\x02')
+            self.assertEqual(packet[-6:], b'\xff#END#')
+            self.assertEqual(packet[24], len(packet[28:-6]) + 3)
+            self.assertEqual(json.loads(packet[28:-6]), {'brightness': str(level), 'type': 2})
+        with self.assertRaises(ValueError):
+            self.module.build_brightness_message(frame, -1)
+        with self.assertRaises(ValueError):
+            self.module.build_brightness_message(b'not a device frame', 25)
 
 
 class ConnectionSetupRaceTests(unittest.TestCase):
