@@ -281,7 +281,7 @@ python aircat-server-web.py
 | `MAX_HTTP_BODY_BYTES` | `16384` | JSON 请求体最大字节数 |
 | `MAX_HTTP_WORKERS` | `16` | Web 请求最大并发处理数 |
 
-> 管理写操作始终要求登录。未设置认证时仪表盘仍可只读访问；设置 `AUTH_PASS` 并重启可为首次或已有数据库启用认证。
+> 认证开关同时控制读取与管理写操作：关闭时无需登录即可保存设置、清理数据或切换存储，所有能访问服务的人都可以操作；开启时必须登录。仅在受信任的网络关闭认证。设置 `AUTH_PASS` 并重启可为首次或已有数据库启用认证。
 
 #### 存储引擎切换
 
@@ -332,8 +332,8 @@ CREATE TABLE sensor_data (
 | `/api/latest` | GET | 可选 | 获取最新一条数据记录 |
 | `/api/history?hours=24` | GET | 可选 | 获取指定小时数内的历史数据 |
 | `/api/settings` | GET | 需要 | 获取当前设置 |
-| `/api/settings` | POST | 需要 | 更新设置（最大记录数、保存天数、认证、日志等） |
-| `/api/cleanup` | POST | 需要 | 清理全部传感器数据 |
+| `/api/settings` | POST | 启用认证时需要 | 更新设置（最大记录数、保存天数、认证、日志等） |
+| `/api/cleanup` | POST | 启用认证时需要 | 清理全部传感器数据 |
 | `/api/login` | POST | 不需要 | 登录认证，返回 token |
 
 ### 数据管理配置（SQLite 版）

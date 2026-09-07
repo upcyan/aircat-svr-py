@@ -618,8 +618,8 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         return False
 
     def _is_admin_authorized(self):
-        """管理写操作始终要求 token，即使只读访问未启用认证。"""
-        return self._has_valid_bearer_token()
+        """管理操作与认证开关保持一致；未初始化时仍拒绝。"""
+        return self._is_authorized()
 
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -766,6 +766,7 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         if not self._is_admin_authorized():
             self._send_json({
                 'error': 'admin authentication required',
+                'message': '保存和其他管理操作需要管理员登录。若尚未设置密码，请在项目环境变量中设置 AUTH_USER 和 AUTH_PASS，重新部署后登录。',
                 'hint': 'set AUTH_USER and AUTH_PASS, then restart the container'
             }, 403)
             return

@@ -145,12 +145,12 @@ class AuthenticationBoundaryTests(unittest.TestCase):
         self.assertNotIn('auth_pass', result)
         self.assertEqual(result['username'], 'admin')
 
-    def test_admin_write_requires_a_valid_token_even_when_auth_is_disabled(self):
+    def test_admin_write_follows_auth_switch_and_invalidates_changed_credentials(self):
         handler = object.__new__(self.web.WebRequestHandler)
         handler.headers = DummyHeaders()
         self.assertFalse(handler._is_admin_authorized())
         class FakeDb:
-            values = {'auth_enabled': 0, 'auth_user': 'admin', 'auth_pass': 'secret'}
+            values = {'auth_enabled': 1, 'auth_user': 'admin', 'auth_pass': 'secret'}
 
             def get_setting(self, key):
                 return self.values[key]
@@ -163,6 +163,8 @@ class AuthenticationBoundaryTests(unittest.TestCase):
             self.assertTrue(handler._is_admin_authorized())
             fake_db.values['auth_pass'] = 'rotated'
             self.assertFalse(handler._is_admin_authorized())
+            fake_db.values['auth_enabled'] = 0
+            self.assertTrue(handler._is_admin_authorized())
 
 
 class HttpIntegrationTests(unittest.TestCase):
@@ -256,6 +258,24 @@ class HttpIntegrationTests(unittest.TestCase):
             'POST', '/api/cleanup', headers={'Authorization': f'Bearer {token}'}
         )
         self.assertEqual(status, 200)
+
+    def test_login_then_save_and_disable_auth(self):
+        status, _, body = self.request('POST', '/api/login',
+            json.dumps({'username': 'admin', 'password': 'secret'}),
+            {'Content-Type': 'application/json'})
+        self.assertEqual(status, 200)
+        headers = {'Content-Type': 'application/json',
+                   'Authorization': 'Bearer ' + json.loads(body)['token']}
+        status, _, _ = self.request('POST', '/api/settings',
+            json.dumps({'m1_brightness': 25}), headers)
+        self.assertEqual(status, 200)
+        status, _, _ = self.request('POST', '/api/settings',
+            json.dumps({'auth_enabled': False}), headers)
+        self.assertEqual(status, 200)
+        status, _, _ = self.request('POST', '/api/settings',
+            json.dumps({'m1_brightness': 50}), {'Content-Type': 'application/json'})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.fake_db.values['m1_brightness'], 50)
 
     def test_oversized_request_is_rejected_before_body_read(self):
         status, _, _ = self.request(

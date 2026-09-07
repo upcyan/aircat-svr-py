@@ -1255,6 +1255,7 @@
             </div>
             <div class="modal-footer">
                 <div class="msg" id="settings-msg" role="status" aria-live="polite" aria-atomic="true"></div>
+                <button class="btn btn-secondary" id="settings-login">管理员登录</button>
                 <button class="btn btn-secondary" id="settings-cancel">取消</button>
                 <button class="btn btn-primary" id="settings-save">保存设置</button>
             </div>
@@ -1361,12 +1362,14 @@
                     " " + pad(d.getUTCHours()) + ":" + pad(d.getUTCMinutes()) + ":" + pad(d.getUTCSeconds());
             }
 
+            var memoryToken = "";
             var getToken = function () {
-                try { return sessionStorage.getItem(TOKEN_KEY) || ""; }
-                catch (e) { return ""; }
+                try { return memoryToken || sessionStorage.getItem(TOKEN_KEY) || ""; }
+                catch (e) { return memoryToken; }
             };
 
             var setToken = function (t) {
+                memoryToken = t || "";
                 try {
                     if (t) { sessionStorage.setItem(TOKEN_KEY, t); }
                     else { sessionStorage.removeItem(TOKEN_KEY); }
@@ -1405,6 +1408,11 @@
                             var e = new Error("HTTP " + res.status);
                             e.status = res.status;
                             e.body = msg;
+                            if (res.status === 403 && msg.error === "admin authentication required") {
+                                setToken("");
+                                showLogin();
+                                showLoginMsg("登录已失效，请重新登录后保存。");
+                            }
                             throw e;
                         });
                     }
@@ -1461,6 +1469,7 @@
                     if (r.status === 200 && r.data && r.data.token) {
                         setToken(r.data.token);
                         hideLogin();
+                        if (settingsOverlay.classList.contains("show")) { loadSettings(); }
                         document.getElementById("login-password").value = "";
                         // 重新加载数据
                         fetchLatest();
@@ -1531,6 +1540,10 @@
             }
 
             settingsBtn.addEventListener("click", openSettings);
+            document.getElementById("settings-login").addEventListener("click", function () {
+                showLogin();
+                showLoginMsg("启用认证时请使用管理员账号登录。");
+            });
             settingsClose.addEventListener("click", closeSettings);
             settingsCancel.addEventListener("click", closeSettings);
 
@@ -1549,7 +1562,8 @@
 
             // 加载当前设置
             function loadSettings() {
-                apiFetch("/api/settings", { method: "GET" }).then(function (d) {
+                settingsSave.disabled = true;
+                return apiFetch("/api/settings", { method: "GET" }).then(function (d) {
                     if (!d) { return; }
                     authEnabled.checked = !!d.auth_enabled;
                     if (authEnabled.checked) {
@@ -1586,6 +1600,7 @@
                     document.getElementById("setting-m1-timer-night-start").value = d.m1_timer_night_start || "23:00";
                     // 根据复选框状态显示/隐藏定时字段
                     toggleTimerFields();
+                    settingsSave.disabled = false;
                 }).catch(function (err) {
                     if (err && err.status !== 401) {
                         showSettingsMsg("加载设置失败", "error");
@@ -1627,6 +1642,9 @@
                     if (!d || d.success !== true) { throw new Error("服务器未确认保存成功"); }
                     showSettingsMsg("✓ 设置已保存", "success");
                     document.getElementById("set-password").value = "";
+                    if (d.settings && d.settings.auth_enabled && (pwd || payload.username || payload.auth_enabled)) {
+                        loadSettings();
+                    }
                 }).catch(function (err) {
                     if (err && err.status !== 401) {
                         var m = "保存失败";
