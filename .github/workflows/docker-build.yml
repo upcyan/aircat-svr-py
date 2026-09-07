@@ -8,6 +8,11 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
+# Keep moving tags from being overwritten by an older concurrent release.
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -122,6 +127,13 @@ jobs:
               '
             done
           done
+
+      - name: Publish and verify single-platform compatibility tags
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          IMAGE_REVISION: ${{ github.sha }}
+          IMAGE_VERSION: ${{ steps.version.outputs.current_version }}
+        run: python3 scripts/publish_platform_tags.py
 
       - name: Increment version
         run: |

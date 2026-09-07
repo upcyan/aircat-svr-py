@@ -365,6 +365,31 @@ CREATE TABLE sensor_data (
 
 ### 绿联 NAS 仍未提示更新时
 
+#### 已知机制与兼容标签
+
+绿联[官方说明](https://support.ugnas.com/detail/article/zh-CN/289)确认：在“管理”启用检测后，项目列表提示镜像更新；执行更新时拉取镜像并重建容器。该文档没有公开检查周期、使用的仓库 API、缓存策略或摘要比较算法。不能断言 UGOS 根据 `APP_VERSION`、版本标签大小或某个 OCI label 判断更新，也不能把“其他容器能检测”当作本镜像构建失败的证据。
+
+Docker 的多架构标签指向 manifest list，各架构还有独立的 manifest 和 config 摘要；这些摘要不能跨层直接比较。参见 [Docker 摘要说明](https://docs.docker.com/dhi/explore/security-concepts/digests/)。本项目既往已验证 `latest` 实际变化且 NAS 能手动拉取新版本；将 OCI index 改为 Docker manifest list 后仍未获得用户端更新提示，因此格式转换并未证明解决问题。
+
+发布流程新增以下**可选兼容标签**，用于排除多架构清单解析这一因素（需本次流程首次成功发布后才能使用）：
+
+| 标签 | 内容 |
+| --- | --- |
+| `latest` | 保持 amd64 / arm64 多架构自动选择 |
+| `latest-arm64` | 直接指向 ARM64 的单镜像 Docker Schema 2 清单 |
+| `latest-amd64` | 直接指向 AMD64 的单镜像 Docker Schema 2 清单 |
+| `<版本>-arm64` / `<版本>-amd64` | 对应发布版本的单架构清单 |
+
+这些标签复用同一构建产物，不重新编译，不改变数据挂载。通过 [`imagetools create --prefer-index=false`](https://docs.docker.com/reference/cli/docker/buildx/imagetools/create/)复制子清单，并在发布后校验标签内容与源清单一致，避免单架构又被包成索引。这是诊断性兼容方案，**不是已经实机证实的 UGOS 修复**；现有 `latest` 用户不会自动切换到兼容标签。
+
+在 NAS SSH 终端用 `docker image inspect "$(docker inspect aircat-server-web --format '{{.Image}}')" --format '{{.Architecture}}'` 确认当前镜像架构，再在绿联原项目中只改 `image` 一行，例如 ARM64 使用 `image: upcyan/aircat-server-web:latest-arm64`。保留原服务名、项目名、端口、数据挂载和其余设置；不要另建同名容器。
+
+已知旧部署的项目名为 `aircat-svr-lite`、服务名为 `aircat-server-sqlite`，配置路径为 `/volume2/DockerFiles/yamlfiles/aircat-server-lite/docker-compose.yaml`。文件夹名不等于 Compose 项目名。优先在绿联原项目界面修改和部署，避免仅由命令行创建的项目与管理界面记录不一致；是否存在这种不同步仍须在 NAS 上核实。
+
+首次切换标签并重新部署后只是建立新的比较基线，需下一次该标签更新才能验证自动提示。测试期间不要提前手动拉取新镜像，否则会改变本地比较状态。如果单架构标签仍无提示，应采集 UGOS / Docker 应用版本、同一项目的检测开关及检查请求返回结果，不能继续宣称镜像格式就是根因。分享日志时隐藏登录令牌和密码。
+
+#### 手动更新与版本检查
+
 此修复需推送到 `main` 并等待 GitHub Actions 成功发布新镜像后才生效，本地修改不会改变 Docker Hub 上的镜像。
 
 1. 确认容器使用 `upcyan/aircat-server-web:latest` 或 `upcyan/aircat-server-lite:latest`，没有固定版本号或 `@sha256:...` 摘要。
