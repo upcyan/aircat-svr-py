@@ -13,7 +13,7 @@
 | 版本 | 说明 | 适用场景 |
 |------|------|----------|
 | **Lite** | 仅采集数据并输出日志 | 轻量部署、二次开发 |
-| **SQLite** | 采集数据存入 SQLite + Web 界面展示 | 开箱即用、数据可视化 |
+| **Web** | 采集数据并通过 Web 界面展示，支持 SQLite/DuckDB | 开箱即用、数据可视化 |
 
 ## 功能特性
 
@@ -27,7 +27,7 @@
 - 日志级别和日志文件可通过环境变量控制
 - M1 设备屏幕亮度控制（固定亮度 / 定时开关屏）
 
-### SQLite 版独有功能
+### Web 版独有功能
 - 数据自动存入 SQLite 数据库，支持持久化
 - 内置 Web 管理界面，实时查看各项数据
 - 历史数据折线图（ECharts），支持点击图例隐藏/显示各项数据
@@ -41,9 +41,9 @@
 ## 技术栈
 
 - **语言**: Python 3.14
-- **框架**: 原生 Socket + http.server（SQLite 版）
-- **数据库**: SQLite（SQLite 版）
-- **前端**: ECharts 5（SQLite 版）
+- **框架**: 原生 Socket + http.server（Web 版）
+- **数据库**: SQLite / DuckDB（Web 版）
+- **前端**: ECharts 5（Web 版）
 - **容器**: Docker / Docker Compose
 - **CI/CD**: GitHub Actions 自动构建双镜像
 
@@ -122,7 +122,7 @@ services:
 
 ---
 
-### SQLite 版（数据存储 + Web 界面）
+### Web 版（数据存储 + Web 界面）
 
 #### Docker 部署
 
@@ -221,7 +221,7 @@ services:
 # Lite 版
 docker build -t aircat-server-lite -f lite.Dockerfile .
 
-# SQLite 版
+# Web 版
 docker build -t aircat-server-web -f web.Dockerfile .
 ```
 
@@ -231,7 +231,7 @@ docker build -t aircat-server-web -f web.Dockerfile .
 # Lite 版
 python aircat-server-lite.py
 
-# SQLite 版
+# Web 版
 python aircat-server-web.py
 ```
 
@@ -270,7 +270,7 @@ python aircat-server-web.py
 
 > `M1_BRIGHTNESS` 优先级高于定时设置。当 `M1_BRIGHTNESS >= 0` 时使用固定亮度，忽略定时设置。
 >
-> Lite 版通过环境变量配置，SQLite 版通过 Web 设置面板配置（也可通过环境变量初始化）。
+> Lite 版通过环境变量配置，Web 版通过 Web 设置面板配置（也可通过环境变量初始化）。
 
 ### Web 版独有环境变量
 
@@ -314,7 +314,7 @@ Web 版支持 **SQLite** 和 **DuckDB** 两种存储引擎，默认 SQLite：
 - **调试排查**：`LOG_LEVEL=DEBUG` + `LOG_FILE=false`（默认），通过 `docker logs -f` 查看所有日志
 - **生产环境**：`LOG_LEVEL=INFO` + `LOG_FILE=false`，仅输出重要信息
 - **持久化日志**：`LOG_LEVEL=DEBUG` + `LOG_FILE=true`，挂载 `./logs:/logs` 目录保存日志文件
-- **数据持久化**（SQLite 版）：挂载 `./data:/data` 目录，数据库文件持久保存到宿主机
+- **数据持久化**（Web 版）：挂载 `./data:/data` 目录，SQLite/DuckDB 数据库文件持久保存到宿主机
 
 ## 数据格式
 
@@ -341,7 +341,7 @@ CREATE TABLE sensor_data (
 );
 ```
 
-## Web API（SQLite 版）
+## Web API（Web 版）
 
 | 接口 | 方法 | 认证 | 说明 |
 |------|------|------|------|
@@ -353,7 +353,7 @@ CREATE TABLE sensor_data (
 | `/api/cleanup` | POST | 启用认证时需要 | 清理全部传感器数据 |
 | `/api/login` | POST | 不需要 | 登录认证，返回 token |
 
-### 数据管理配置（SQLite 版）
+### 数据管理配置（Web 版）
 
 通过 Web 设置面板或 API 配置，所有设置持久化在 SQLite 数据库中：
 
@@ -438,7 +438,7 @@ docker compose up -d
 | 端口 | 版本 | 说明 |
 |------|------|------|
 | 9000 | 通用 | TCP Socket 服务端口，接收 M1 设备连接 |
-| 8080 | SQLite 版 | Web 界面端口，浏览器访问查看数据 |
+| 8080 | Web 版 | Web 界面端口，浏览器访问查看数据 |
 
 ## 许可证
 
