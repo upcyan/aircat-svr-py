@@ -6,7 +6,7 @@
 >
 > 支持架构：`linux/amd64` · `linux/arm64`
 
-> 本项目基于 [fenggenet/PhicommM1_Server](https://github.com/fenggenet/PhicommM1_Server) 修改而来，在原项目基础上增加了 Docker 容器化部署、SQLite 存储、Web 可视化界面、设备亮度控制等功能。
+> 本项目基于 [fenggenet/PhicommM1_Server](https://github.com/fenggenet/PhicommM1_Server) 修改而来，在原项目基础上增加了 Docker 容器化部署、数据库存储、Web 可视化界面、设备亮度控制等功能。
 
 基于 Docker 和 Python 的斐讯悟空（Phicomm AirCat）M1 设备数据采集服务器，提供两个版本：
 
