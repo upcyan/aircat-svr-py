@@ -66,7 +66,10 @@ aircat-svr-py/
 │       └── docker-build.yml       # GitHub Actions 自动构建双镜像
 ├── lite.Dockerfile                # Lite 版 Docker 镜像
 ├── web.Dockerfile                 # Web 版 Docker 镜像
+├── server_common.py               # TCP 数据帧边界与超时控制
 ├── storage_backends.py            # 存储引擎抽象层（SQLite/DuckDB）
+├── tests/
+│   └── test_server_safety.py       # 安全、HTTP、重连集成测试
 ├── VERSION                        # 版本号
 └── README.md                      # 项目说明文档
 ```
@@ -279,9 +282,23 @@ python aircat-server-web.py
 | `AUTH_USER` | `admin`（仅设置密码时） | 设置管理用户名 |
 | `AUTH_PASS` | （空） | 设置后启用认证；也可修复已有数据库的无认证状态 |
 | `MAX_HTTP_BODY_BYTES` | `16384` | JSON 请求体最大字节数 |
+| `HTTP_REQUEST_TIMEOUT` | `10` | HTTP 请求读取超时时间（秒） |
 | `MAX_HTTP_WORKERS` | `16` | Web 请求最大并发处理数 |
+| `LOGIN_MAX_FAILURES` | `5` | 登录限流窗口内允许的失败次数 |
+| `LOGIN_WINDOW_SECONDS` | `300` | 登录失败统计窗口（秒） |
+| `LOGIN_LOCKOUT_SECONDS` | `60` | 超过失败次数后的锁定时间（秒） |
 
 > 认证开关同时控制读取与管理写操作：关闭时无需登录即可保存设置、清理数据或切换存储，所有能访问服务的人都可以操作；开启时必须登录。仅在受信任的网络关闭认证。设置 `AUTH_PASS` 并重启可为首次或已有数据库启用认证。
+
+> 安全建议：Web 管理端口 `8080` 只暴露给可信局域网；不要将设备 TCP 端口 `9000` 或管理端口直接暴露到公网。M1 原始协议本身没有应用层认证，设备接入安全依赖路由器防火墙和局域网隔离。
+
+### 安全与连接保护
+
+- TCP 单帧默认限制为 `65536` 字节，并限制完整帧接收时长，避免恶意或异常设备耗尽内存和线程。
+- 设备并发连接数和 Web 请求线程数均有限制；Web 版会清理同一设备 IP 的旧半开连接。
+- HTTP 请求体有大小上限，分块传输请求不接受无界读取。
+- 登录令牌随机生成、默认 1 小时过期；修改认证配置或密码后旧令牌自动失效。
+- 失败登录会按客户端地址限流；认证错误不会泄露数据库密码。
 
 #### 存储引擎切换
 
@@ -402,6 +419,15 @@ Docker 的多架构标签指向 manifest list，各架构还有独立的 manifes
    ```
 
 4. 若拉取失败，先检查 NAS 到 Docker Hub 的连接、认证及限流；使用镜像代理时还需检查代理缓存是否同步。若可以拉取到新镜像却没有更新提示，请记录 UGOS / Docker 应用版本、完整镜像标签和检测日志，进一步确认检测器兼容性。
+
+镜像发布同时包含 `latest`、版本号和提交 SHA 标签。若 NAS 仍未提示更新，可手动执行：
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+发布后 GitHub Actions 会自动递增仓库中的 `VERSION`；正在运行的容器不会自动重启，必须由 NAS 更新检测或上述命令重新创建容器。
 
 ## 断网恢复
 
